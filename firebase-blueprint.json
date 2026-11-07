@@ -1,0 +1,181 @@
+{
+  "entities": {
+    "Institution": {
+      "title": "Institution",
+      "description": "Hospital or clinic institution in the biomedical management network",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "city": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "address": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "requireLoginForScan": { "type": "boolean" },
+        "nextConsecutive": { "type": "number" }
+      },
+      "required": ["id", "name", "city", "department", "requireLoginForScan", "nextConsecutive"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "System user account with hospital affiliation and professional credentials",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 150 },
+        "fullName": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "enum": ["ingeniero", "admin_hospital", "enfermeria", "consulta"] },
+        "institutionId": { "type": "string", "maxLength": 128 },
+        "rh": { "type": "string", "maxLength": 60 },
+        "cargo": { "type": "string", "maxLength": 100 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "email", "fullName", "role", "institutionId", "active"]
+    },
+    "Equipment": {
+      "title": "Equipment",
+      "description": "Biomedical equipment registered under a hospital institution",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "codigoActivo": { "type": "string", "maxLength": 80 },
+        "institutionId": { "type": "string", "maxLength": 128 },
+        "servicioUbicacion": { "type": "string", "maxLength": 150 },
+        "nombre": { "type": "string", "maxLength": 150 },
+        "marca": { "type": "string", "maxLength": 100 },
+        "modelo": { "type": "string", "maxLength": 100 },
+        "serie": { "type": "string", "maxLength": 100 },
+        "registroInvima": { "type": "string", "maxLength": 100 },
+        "anioFabricacion": { "type": "number" },
+        "fotoUrl": { "type": "string", "maxLength": 100000 },
+        "tipoAdquisicion": { "type": "string", "enum": ["compra", "comodato", "leasing", "otros"] },
+        "tipoMantenimiento": { "type": "string", "enum": ["preventivo", "correctivo", "na"] },
+        "regimenMantenimiento": { "type": "string", "enum": ["propio", "contratado"] },
+        "frecuenciaMantenimientoMeses": { "type": "number" },
+        "clasificacionBiomedica": { "type": "string", "maxLength": 50 },
+        "clasificacionUso": { "type": "string", "enum": ["medico", "basico", "apoyo"] },
+        "clasificacionRiesgo": { "type": "string", "enum": ["I", "IIa", "IIb", "III"] },
+        "movilidad": { "type": "string", "enum": ["fijo", "movil"] },
+        "observaciones": { "type": "string", "maxLength": 2000 },
+        "recomendacionesFabricante": { "type": "string", "maxLength": 2000 },
+        "tagToken": { "type": "string", "maxLength": 128 },
+        "tagActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 },
+        "lastUpdatedBy": { "type": "string", "maxLength": 150 }
+      },
+      "required": [
+        "id",
+        "codigoActivo",
+        "institutionId",
+        "nombre",
+        "marca",
+        "modelo",
+        "serie",
+        "frecuenciaMantenimientoMeses",
+        "tagToken",
+        "tagActive"
+      ]
+    },
+    "Maintenance": {
+      "title": "Maintenance",
+      "description": "Technical service report in MMC S.A.S. format for biomedical maintenance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "equipmentId": { "type": "string", "maxLength": 128 },
+        "institutionId": { "type": "string", "maxLength": 128 },
+        "numeroReporte": { "type": "string", "maxLength": 50 },
+        "consecutivo": { "type": "number" },
+        "fecha": { "type": "string", "maxLength": 50 },
+        "cliente": { "type": "string", "maxLength": 150 },
+        "ciudadDpto": { "type": "string", "maxLength": 100 },
+        "servicioUbicacion": { "type": "string", "maxLength": 150 },
+        "tipoServicio": { "type": "string", "enum": ["preventivo", "correctivo", "garantia", "capacitacion", "otro"] },
+        "tipoServicioOtro": { "type": "string", "maxLength": 100 },
+        "observacionesRepuestos": { "type": "string", "maxLength": 3000 },
+        "trabajoRealizadoPor": { "type": "string", "maxLength": 150 },
+        "cargo": { "type": "string", "maxLength": 100 },
+        "rh": { "type": "string", "maxLength": 60 },
+        "recibidoSatisfaccion": { "type": "string", "maxLength": 150 },
+        "proximaFechaCalculada": { "type": "string", "maxLength": 50 },
+        "duracionHoras": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": [
+        "id",
+        "equipmentId",
+        "institutionId",
+        "numeroReporte",
+        "fecha",
+        "tipoServicio",
+        "trabajoRealizadoPor",
+        "rh",
+        "proximaFechaCalculada"
+      ]
+    },
+    "IncidentReport": {
+      "title": "IncidentReport",
+      "description": "Failure or technical malfunction reported by clinical or nursing staff",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "equipmentId": { "type": "string", "maxLength": 128 },
+        "institutionId": { "type": "string", "maxLength": 128 },
+        "fecha": { "type": "string", "maxLength": 50 },
+        "reportadoPor": { "type": "string", "maxLength": 150 },
+        "cargo": { "type": "string", "maxLength": 100 },
+        "descripcion": { "type": "string", "maxLength": 2000 },
+        "prioridad": { "type": "string", "enum": ["baja", "media", "alta", "critica"] },
+        "estado": { "type": "string", "enum": ["pendiente", "en_revision", "resuelto"] },
+        "createdAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "equipmentId", "institutionId", "fecha", "reportadoPor", "descripcion", "prioridad", "estado"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable traceability audit entry recording changes made by biomedical engineers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "equipmentId": { "type": "string", "maxLength": 128 },
+        "institutionId": { "type": "string", "maxLength": 128 },
+        "entityType": { "type": "string", "enum": ["equipment", "maintenance", "tag"] },
+        "action": { "type": "string", "enum": ["create", "update", "deactivate_tag", "new_tag"] },
+        "timestamp": { "type": "string", "maxLength": 50 },
+        "changedBy": { "type": "string", "maxLength": 150 },
+        "changedByRh": { "type": "string", "maxLength": 60 },
+        "summary": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "equipmentId", "institutionId", "entityType", "action", "timestamp", "changedBy", "changedByRh", "summary"]
+    }
+  },
+  "firestore": {
+    "/institutions/{institutionId}": {
+      "schema": { "$ref": "#/entities/Institution" },
+      "description": "Hospital or clinic institutions"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Hospital user accounts with roles and RH professional registration"
+    },
+    "/equipments/{equipmentId}": {
+      "schema": { "$ref": "#/entities/Equipment" },
+      "description": "Hospital biomedical equipment records"
+    },
+    "/maintenances/{maintenanceId}": {
+      "schema": { "$ref": "#/entities/Maintenance" },
+      "description": "Official technical maintenance service reports"
+    },
+    "/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/IncidentReport" },
+      "description": "Equipment failure reports filed by nursing and clinical teams"
+    },
+    "/audit_logs/{auditId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Audit trails for equipment modifications"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Trazabilidad de equipos biomédicos",
+  "description": "Sistema de gestión y trazabilidad del mantenimiento de equipos biomédicos hospitalarios mediante tokens aleatorios NFC y códigos QR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

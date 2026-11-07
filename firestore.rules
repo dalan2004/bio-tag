@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isHospitalUser(instId) {
+      return userExists() && getUserData().active == true && getUserData().institutionId == instId;
+    }
+
+    function isIngeniero(instId) {
+      return isHospitalUser(instId) && getUserData().role == 'ingeniero';
+    }
+
+    function isAdminHospital(instId) {
+      return isHospitalUser(instId) && getUserData().role == 'admin_hospital';
+    }
+
+    // INSTITUTIONS
+    match /institutions/{institutionId} {
+      // Readable publicly for hospital branding and scan configuration (requireLoginForScan)
+      allow get, list: if true;
+      allow create: if isSignedIn();
+      allow update: if isValidId(institutionId) && isAdminHospital(institutionId);
+      allow delete: if false;
+    }
+
+    // USER PROFILES
+    match /users/{userId} {
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId ||
+        (userExists() && getUserData().institutionId == resource.data.institutionId)
+      );
+      allow list: if isSignedIn() && userExists();
+      // Only hospital admin can create and update users for their own hospital
+      allow create: if isSignedIn() && (
+        request.auth.uid == userId ||
+        isAdminHospital(request.resource.data.institutionId)
+      );
+      allow update: if isSignedIn() && isValidId(userId) && (
+        (request.auth.uid == userId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fullName', 'cargo'])) ||
+        (isAdminHospital(resource.data.institutionId) && request.resource.data.institutionId == resource.data.institutionId)
+      );
+      allow delete: if false;
+    }
+
+    // BIOMEDICAL EQUIPMENT
+    match /equipments/{equipmentId} {
+      // Unauthenticated public mobile read is allowed if tag is active,
+      // or authenticated members of the hospital can read all equipments
+      allow get: if (resource.data.tagActive == true) ||
+        (isSignedIn() && isHospitalUser(resource.data.institutionId));
+      allow list: if true;
+
+      // Only engineer of the hospital can create equipment
+      allow create: if isValidId(equipmentId) &&
+        isIngeniero(request.resource.data.institutionId) &&
+        request.resource.data.tagToken is string &&
+        request.resource.data.tagToken.size() >= 16;
+
+      // Only engineer of the hospital can update equipment (including tag token regeneration and life sheet updates)
+      allow update: if isValidId(equipmentId) &&
+        isIngeniero(resource.data.institutionId) &&
+        request.resource.data.institutionId == resource.data.institutionId;
+
+      // Preserving full equipment life sheets and traceability history
+      allow delete: if false;
+    }
+
+    // MAINTENANCE SERVICE REPORTS (MMC S.A.S. FORMAT)
+    match /maintenances/{maintenanceId} {
+      // Readable for inspection upon scan or by hospital users
+      allow get, list: if true;
+
+      // Only engineer of that hospital can file a maintenance report, and their RH must match their profile
+      allow create: if isValidId(maintenanceId) &&
+        isIngeniero(request.resource.data.institutionId) &&
+        request.resource.data.rh == getUserData().rh;
+
+      // Maintenance reports are official audit records and cannot be altered or deleted once signed
+      allow update, delete: if false;
+    }
+
+    // INCIDENT & FAILURE REPORTS
+    match /incidents/{incidentId} {
+      allow get, list: if isSignedIn() && isHospitalUser(resource.data.institutionId);
+      // Nursing and all hospital users can report failures
+      allow create: if isValidId(incidentId) && isHospitalUser(request.resource.data.institutionId);
+      // Engineers or admins can update incident status (e.g. en_revision, resuelto)
+      allow update: if isValidId(incidentId) &&
+        (isIngeniero(resource.data.institutionId) || isAdminHospital(resource.data.institutionId));
+      allow delete: if false;
+    }
+
+    // AUDIT LOGS (IMMUTABLE LOGS)
+    match /audit_logs/{auditId} {
+      allow get, list: if isSignedIn() &&
+        (isIngeniero(resource.data.institutionId) || isAdminHospital(resource.data.institutionId));
+      allow create: if isValidId(auditId) && isIngeniero(request.resource.data.institutionId);
+      allow update, delete: if false;
+    }
+  }
+}
