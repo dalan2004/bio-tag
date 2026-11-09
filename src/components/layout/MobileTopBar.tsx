@@ -7,18 +7,22 @@ import {
   Building,
   User,
   Plus,
+  KeyRound,
+  LogOut,
 } from 'lucide-react';
 
 interface MobileTopBarProps {
   onOpenNfcScanner: () => void;
-  onOpenLoginModal: () => void;
+  onOpenLoginModal?: () => void;
   onOpenNewEquipment: () => void;
+  onOpenChangePassword?: () => void;
 }
 
 export const MobileTopBar: React.FC<MobileTopBarProps> = ({
   onOpenNfcScanner,
   onOpenLoginModal,
   onOpenNewEquipment,
+  onOpenChangePassword,
 }) => {
   const {
     companyProfile,
@@ -28,6 +32,7 @@ export const MobileTopBar: React.FC<MobileTopBarProps> = ({
     isIngeniero,
     darkMode,
     toggleDarkMode,
+    logout,
   } = useBiomedical();
 
   const getCompanyInitials = (nameStr: string) => {
@@ -89,13 +94,34 @@ export const MobileTopBar: React.FC<MobileTopBarProps> = ({
           {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-500" />}
         </button>
 
-        {!isAuthenticated && (
-          <button
-            onClick={onOpenLoginModal}
-            className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-          >
-            Entrar
-          </button>
+        {isAuthenticated ? (
+          <>
+            {onOpenChangePassword && (
+              <button
+                onClick={onOpenChangePassword}
+                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:text-teal-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                title="Cambiar contraseña"
+              >
+                <KeyRound className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+              title="Cerrar sesión"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </>
+        ) : (
+          onOpenLoginModal && (
+            <button
+              onClick={onOpenLoginModal}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+            >
+              Entrar
+            </button>
+          )
         )}
       </div>
     </header>

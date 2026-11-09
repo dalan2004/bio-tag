@@ -27,7 +27,7 @@ interface DirectMobileScanViewProps {
   onOpenEditEquipment: () => void;
   onOpenNewMaintenance: () => void;
   onOpenReportIncident: () => void;
-  onOpenLoginModal: () => void;
+  onOpenLoginModal?: () => void;
 }
 
 export const DirectMobileScanView: React.FC<DirectMobileScanViewProps> = ({

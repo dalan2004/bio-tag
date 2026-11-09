@@ -16,7 +16,9 @@ import {
   Clock,
   Camera,
   Upload,
+  Loader2,
 } from 'lucide-react';
+import { uploadFileToStorage } from '../../firebase';
 
 interface EquipmentFormModalProps {
   isOpen: boolean;
@@ -54,6 +56,9 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
   const [registroInvima, setRegistroInvima] = useState('');
   const [anioFabricacion, setAnioFabricacion] = useState<number | ''>('');
   const [fotoUrl, setFotoUrl] = useState('');
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [tipoAdquisicion, setTipoAdquisicion] = useState<'compra' | 'comodato' | 'leasing' | 'otros' | ''>('');
   const [tipoMantenimiento, setTipoMantenimiento] = useState<'preventivo' | 'correctivo' | 'na' | ''>('');
@@ -206,104 +211,114 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
     setOpenSections((prev) => ({ ...prev, [sec]: !prev[sec] }));
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setFotoUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+      setIsUploadingPhoto(true);
+      try {
+        const downloadUrl = await uploadFileToStorage(file, 'equipment_photos');
+        setFotoUrl(downloadUrl);
+      } catch (err) {
+        console.error('Error subiendo foto de equipo a Firebase Storage:', err);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     if (!nombre.trim() || !serie.trim() || !servicioUbicacion.trim()) {
-      alert('Por favor complete los campos obligatorios: Nombre, Serie y Ubicación.');
+      setSaveError('Por favor complete los campos obligatorios: Nombre, Serie y Ubicación.');
       return;
     }
 
     // Auto-generate code if empty
     const code = codigoActivo.trim() || `EQ-${nombre.slice(0, 3).toUpperCase()}-${serie.slice(-4)}`;
+    setIsSubmitting(true);
 
-    if (isEditing && equipmentToEdit) {
-      updateEquipment({
-        ...equipmentToEdit,
-        institutionId: institutionId || equipmentToEdit.institutionId,
-        codigoActivo: code,
-        servicioUbicacion: servicioUbicacion.trim(),
-        nombre: nombre.trim(),
-        marca: marca.trim(),
-        modelo: modelo.trim(),
-        serie: serie.trim(),
-        registroInvima: registroInvima.trim(),
-        anioFabricacion: typeof anioFabricacion === 'number' ? anioFabricacion : 2024,
-        fotoUrl,
-        tipoAdquisicion: (tipoAdquisicion as any) || 'compra',
-        tipoMantenimiento: (tipoMantenimiento as any) || 'preventivo',
-        regimenMantenimiento: (regimenMantenimiento as any) || 'propio',
-        frecuenciaMantenimientoMeses: (frecuenciaMeses as any) || 6,
-        documentacion,
-        clasificacionBiomedica: (clasificacionBiomedica as any) || 'tratamiento_soporte',
-        clasificacionUso: (clasificacionUso as any) || 'medico',
-        clasificacionRiesgo: (clasificacionRiesgo as any) || 'IIb',
-        movilidad: (movilidad as any) || 'movil',
-        tecnologiaPredominante: tecnologia,
-        caracteristicasTecnicas: caracteristicas,
-        fuentesAlimentacion: fuentes,
-        accesorios,
-        observaciones: observaciones.trim(),
-        recomendacionesFabricante: recomendaciones.trim(),
-      });
-    } else {
-      // Cryptographically random 24-character token
-      const randomBytes = new Uint8Array(12);
-      crypto.getRandomValues(randomBytes);
-      const hex = Array.from(randomBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-      const newToken = `bio_tag_${hex}`;
+    try {
+      if (isEditing && equipmentToEdit) {
+        await updateEquipment({
+          ...equipmentToEdit,
+          institutionId: institutionId || equipmentToEdit.institutionId,
+          codigoActivo: code,
+          servicioUbicacion: servicioUbicacion.trim(),
+          nombre: nombre.trim(),
+          marca: marca.trim(),
+          modelo: modelo.trim(),
+          serie: serie.trim(),
+          registroInvima: registroInvima.trim(),
+          anioFabricacion: typeof anioFabricacion === 'number' ? anioFabricacion : 2024,
+          fotoUrl,
+          tipoAdquisicion: (tipoAdquisicion as any) || 'compra',
+          tipoMantenimiento: (tipoMantenimiento as any) || 'preventivo',
+          regimenMantenimiento: (regimenMantenimiento as any) || 'propio',
+          frecuenciaMantenimientoMeses: (frecuenciaMeses as any) || 6,
+          documentacion,
+          clasificacionBiomedica: (clasificacionBiomedica as any) || 'tratamiento_soporte',
+          clasificacionUso: (clasificacionUso as any) || 'medico',
+          clasificacionRiesgo: (clasificacionRiesgo as any) || 'IIb',
+          movilidad: (movilidad as any) || 'movil',
+          tecnologiaPredominante: tecnologia,
+          caracteristicasTecnicas: caracteristicas,
+          fuentesAlimentacion: fuentes,
+          accesorios,
+          observaciones: observaciones.trim(),
+          recomendacionesFabricante: recomendaciones.trim(),
+        });
+      } else {
+        // Cryptographically random 24-character token
+        const randomBytes = new Uint8Array(12);
+        crypto.getRandomValues(randomBytes);
+        const hex = Array.from(randomBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+        const newToken = `bio_tag_${hex}`;
 
-      const newId = `eq-${Date.now()}`;
-      addEquipment({
-        id: newId,
-        institutionId: institutionId || userHospitalId,
-        codigoActivo: code,
-        servicioUbicacion: servicioUbicacion.trim(),
-        nombre: nombre.trim(),
-        marca: marca.trim(),
-        modelo: modelo.trim(),
-        serie: serie.trim(),
-        registroInvima: registroInvima.trim(),
-        anioFabricacion: typeof anioFabricacion === 'number' ? anioFabricacion : 2024,
-        fotoUrl,
-        tipoAdquisicion: (tipoAdquisicion as any) || 'compra',
-        tipoMantenimiento: (tipoMantenimiento as any) || 'preventivo',
-        regimenMantenimiento: (regimenMantenimiento as any) || 'propio',
-        frecuenciaMantenimientoMeses: (frecuenciaMeses as any) || 6,
-        documentacion,
-        clasificacionBiomedica: (clasificacionBiomedica as any) || 'tratamiento_soporte',
-        clasificacionUso: (clasificacionUso as any) || 'medico',
-        clasificacionRiesgo: (clasificacionRiesgo as any) || 'IIb',
-        movilidad: (movilidad as any) || 'movil',
-        tecnologiaPredominante: tecnologia,
-        caracteristicasTecnicas: caracteristicas,
-        fuentesAlimentacion: fuentes,
-        accesorios,
-        observaciones: observaciones.trim(),
-        recomendacionesFabricante: recomendaciones.trim(),
-        tagToken: newToken,
-        tagActive: true,
-        fechaCreacion: new Date().toISOString().slice(0, 10),
-      });
+        const newId = `eq-${Date.now()}`;
+        await addEquipment({
+          id: newId,
+          institutionId: institutionId || userHospitalId,
+          codigoActivo: code,
+          servicioUbicacion: servicioUbicacion.trim(),
+          nombre: nombre.trim(),
+          marca: marca.trim(),
+          modelo: modelo.trim(),
+          serie: serie.trim(),
+          registroInvima: registroInvima.trim(),
+          anioFabricacion: typeof anioFabricacion === 'number' ? anioFabricacion : 2024,
+          fotoUrl,
+          tipoAdquisicion: (tipoAdquisicion as any) || 'compra',
+          tipoMantenimiento: (tipoMantenimiento as any) || 'preventivo',
+          regimenMantenimiento: (regimenMantenimiento as any) || 'propio',
+          frecuenciaMantenimientoMeses: (frecuenciaMeses as any) || 6,
+          documentacion,
+          clasificacionBiomedica: (clasificacionBiomedica as any) || 'tratamiento_soporte',
+          clasificacionUso: (clasificacionUso as any) || 'medico',
+          clasificacionRiesgo: (clasificacionRiesgo as any) || 'IIb',
+          movilidad: (movilidad as any) || 'movil',
+          tecnologiaPredominante: tecnologia,
+          caracteristicasTecnicas: caracteristicas,
+          fuentesAlimentacion: fuentes,
+          accesorios,
+          observaciones: observaciones.trim(),
+          recomendacionesFabricante: recomendaciones.trim(),
+          tagToken: newToken,
+          tagActive: true,
+          fechaCreacion: new Date().toISOString().slice(0, 10),
+        });
 
-      localStorage.removeItem(STORAGE_DRAFT_EQ_KEY);
-      setActiveEquipmentId(newId);
-      setActiveTab('hoja_de_vida');
+        localStorage.removeItem(STORAGE_DRAFT_EQ_KEY);
+        setActiveEquipmentId(newId);
+        setActiveTab('hoja_de_vida');
+      }
+
+      onClose();
+    } catch (err: any) {
+      setSaveError(err instanceof Error ? err.message : 'Error al guardar el equipo en Firestore.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    onClose();
   };
 
   return (
@@ -711,10 +726,26 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
                     {fotoUrl && (
                       <img src={fotoUrl} alt="Foto" className="w-16 h-16 rounded-xl object-contain border p-1" />
                     )}
-                    <label className="py-2 px-3 border border-dashed rounded-xl cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2">
-                      <Upload className="w-4 h-4 text-slate-400" />
-                      <span>{fotoUrl ? 'Cambiar fotografía' : 'Subir imagen del equipo'}</span>
-                      <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
+                    <label className="py-2 px-3 border border-dashed rounded-xl cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2 text-xs">
+                      {isUploadingPhoto ? (
+                        <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4 text-slate-400" />
+                      )}
+                      <span>
+                        {isUploadingPhoto
+                          ? 'Guardando en Firebase Storage...'
+                          : fotoUrl
+                          ? 'Cambiar fotografía'
+                          : 'Subir imagen del equipo'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoUpload}
+                        disabled={isUploadingPhoto}
+                        className="hidden"
+                      />
                     </label>
                   </div>
                 </div>
@@ -735,6 +766,13 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
             )}
           </div>
 
+          {saveError && (
+            <div className="p-3 mx-4 mb-2 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+              <span className="font-bold">Error:</span>
+              <span>{saveError}</span>
+            </div>
+          )}
+
         </form>
 
         {/* Sticky Save Bar */}
@@ -742,6 +780,7 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            disabled={isSubmitting}
             className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             Cancelar
@@ -750,10 +789,21 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm shadow-teal-700/20"
+            disabled={isSubmitting || isUploadingPhoto}
+            className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm shadow-teal-700/20"
           >
-            <Save className="w-4 h-4" />
-            <span>{isEditing ? 'Guardar Cambios' : 'Registrar Equipo Biomédico'}</span>
+            {isSubmitting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            <span>
+              {isSubmitting
+                ? 'Guardando en Firestore...'
+                : isEditing
+                ? 'Guardar Cambios'
+                : 'Registrar Equipo Biomédico'}
+            </span>
           </button>
         </div>
 

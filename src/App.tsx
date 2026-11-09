@@ -17,16 +17,20 @@ import { NfcSimulatorModal } from './components/modals/NfcSimulatorModal';
 import { NewMaintenanceModal } from './components/modals/NewMaintenanceModal';
 import { EquipmentFormModal } from './components/modals/EquipmentFormModal';
 import { ReportIncidentModal } from './components/modals/ReportIncidentModal';
-import { LoginModal } from './components/modals/LoginModal';
 import { SetupWizardModal } from './components/modals/SetupWizardModal';
+import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
+import { AuthScreen } from './components/auth/AuthScreen';
 import { BiomedicalEquipment } from './types/biomedical';
-import { Radio } from 'lucide-react';
+import { Radio, Loader2, Activity } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
   const {
+    isAuthLoading,
+    isAuthenticated,
     activeTab,
     selectedEquipment,
     institutions,
+    users,
     bindNewTag,
     scanFeedback,
     setScanFeedback,
@@ -36,7 +40,7 @@ const MainAppContent: React.FC = () => {
   } = useBiomedical();
 
   // Modals state
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isNfcScannerOpen, setIsNfcScannerOpen] = useState(false);
   const [isNfcQrModalOpen, setIsNfcQrModalOpen] = useState(false);
   const [isNewMaintenanceOpen, setIsNewMaintenanceOpen] = useState(false);
@@ -69,6 +73,42 @@ const MainAppContent: React.FC = () => {
   const stickerEquipment = targetEquipmentForSticker || selectedEquipment;
   const stickerInstitution = institutions.find((i) => i.id === stickerEquipment?.institutionId);
 
+  // While checking session and syncing with Firestore, show a loading screen and not the login modal
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white font-sans">
+        <div className="w-16 h-16 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center mb-5 animate-pulse shadow-lg shadow-teal-500/10">
+          <Activity className="w-8 h-8 text-teal-400" />
+        </div>
+        <h1 className="text-xl font-bold tracking-tight mb-2 text-white">BIO-TAG</h1>
+        <div className="flex items-center gap-2.5 text-xs text-slate-400 bg-slate-800/80 px-4 py-2 rounded-full border border-slate-700/60">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-400" />
+          <span>Comprobando sesión y sincronizando con Cloud Firestore...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If not authenticated: STRICT ACCESS CONTROL.
+  // The user can NEVER see any screen, dashboard, or data without a valid active session.
+  if (!isAuthenticated) {
+    const hasAnyAdmin = users.some((u) => u.role === 'admin_hospital' && u.active);
+    return (
+      <>
+        <AuthScreen
+          onOpenSetupWizard={!hasAnyAdmin ? () => setIsSetupWizardOpen(true) : undefined}
+        />
+        {/* If first time with no admin registered, allow setup wizard modal */}
+        {!hasAnyAdmin && (
+          <SetupWizardModal
+            isOpen={isSetupWizardOpen}
+            onClose={() => setIsSetupWizardOpen(false)}
+          />
+        )}
+      </>
+    );
+  }
+
   // If URL points to /e/[TOKEN] or direct mobile scan mode is active:
   // Directly render the dedicated scan view without prior menus!
   if (isDirectScanMode) {
@@ -81,13 +121,6 @@ const MainAppContent: React.FC = () => {
             setIsNewMaintenanceOpen(true);
           }}
           onOpenReportIncident={() => setIsReportIncidentOpen(true)}
-          onOpenLoginModal={() => setIsLoginModalOpen(true)}
-        />
-
-        {/* Global Modals operable within scan view */}
-        <LoginModal
-          isOpen={isLoginModalOpen}
-          onClose={() => setIsLoginModalOpen(false)}
         />
 
         <NewMaintenanceModal
@@ -109,6 +142,11 @@ const MainAppContent: React.FC = () => {
           isOpen={isReportIncidentOpen}
           onClose={() => setIsReportIncidentOpen(false)}
         />
+
+        <ChangePasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+        />
       </>
     );
   }
@@ -125,8 +163,8 @@ const MainAppContent: React.FC = () => {
 
       {/* Desktop Left Sidebar */}
       <AppSidebar
-        onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenNfcScanner={() => setIsNfcScannerOpen(true)}
+        onOpenChangePassword={() => setIsChangePasswordOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -135,8 +173,8 @@ const MainAppContent: React.FC = () => {
         {/* Mobile Top Header */}
         <MobileTopBar
           onOpenNfcScanner={() => setIsNfcScannerOpen(true)}
-          onOpenLoginModal={() => setIsLoginModalOpen(true)}
           onOpenNewEquipment={handleOpenNewEquipment}
+          onOpenChangePassword={() => setIsChangePasswordOpen(true)}
         />
 
         {/* Global Toast Notification */}
@@ -232,14 +270,14 @@ const MainAppContent: React.FC = () => {
 
       {/* Mobile Bottom Navigation Bar */}
       <MobileBottomNav
-        onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenNfcScanner={() => setIsNfcScannerOpen(true)}
+        onOpenChangePassword={() => setIsChangePasswordOpen(true)}
       />
 
       {/* Global Modals */}
-      <LoginModal
-        isOpen={isLoginModalOpen}
-        onClose={() => setIsLoginModalOpen(false)}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
       />
 
       {stickerEquipment && (

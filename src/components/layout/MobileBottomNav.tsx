@@ -16,17 +16,20 @@ import {
   Moon,
   X,
   Building,
+  KeyRound,
 } from 'lucide-react';
 import { ActiveTab } from '../../types/biomedical';
 
 interface MobileBottomNavProps {
-  onOpenLoginModal: () => void;
+  onOpenLoginModal?: () => void;
   onOpenNfcScanner: () => void;
+  onOpenChangePassword?: () => void;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   onOpenLoginModal,
   onOpenNfcScanner,
+  onOpenChangePassword,
 }) => {
   const {
     activeTab,
@@ -131,27 +134,43 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               </button>
 
               {isAuthenticated ? (
-                <button
-                  onClick={() => {
-                    setIsMoreMenuOpen(false);
-                    logout();
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-rose-600 font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>Cerrar sesión</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {onOpenChangePassword && (
+                    <button
+                      onClick={() => {
+                        setIsMoreMenuOpen(false);
+                        onOpenChangePassword();
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-teal-600 dark:text-teal-400 font-semibold hover:bg-teal-50 dark:hover:bg-teal-950/40 rounded-xl"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>Cambiar clave</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setIsMoreMenuOpen(false);
+                      logout();
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-rose-600 font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Cerrar sesión</span>
+                  </button>
+                </div>
               ) : (
-                <button
-                  onClick={() => {
-                    setIsMoreMenuOpen(false);
-                    onOpenLoginModal();
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-xl font-semibold"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Iniciar sesión</span>
-                </button>
+                onOpenLoginModal && (
+                  <button
+                    onClick={() => {
+                      setIsMoreMenuOpen(false);
+                      onOpenLoginModal();
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-xl font-semibold"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Iniciar sesión</span>
+                  </button>
+                )
               )}
             </div>
 

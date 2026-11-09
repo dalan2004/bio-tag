@@ -13,7 +13,14 @@ import {
   Mail,
   Phone,
   Palette,
+  Eye,
+  EyeOff,
+  Lock,
+  Loader2,
+  KeyRound,
+  CheckCircle2,
 } from 'lucide-react';
+import { uploadFileToStorage, checkPasswordStrength } from '../../firebase';
 
 interface SetupWizardModalProps {
   isOpen: boolean;
@@ -21,7 +28,7 @@ interface SetupWizardModalProps {
 }
 
 export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) => {
-  const { completeOnboardingSetup } = useBiomedical();
+  const { completeCompanyAndAdminRegistration } = useBiomedical();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
@@ -44,27 +51,34 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
   const [hospitalTelefono, setHospitalTelefono] = useState('');
   const [hospitalConsecutivo, setHospitalConsecutivo] = useState(1);
 
-  // Step 3: Engineer User
-  const [ingenieroNombre, setIngenieroNombre] = useState('');
-  const [ingenieroEmail, setIngenieroEmail] = useState('');
-  const [ingenieroCargo, setIngenieroCargo] = useState('Ingeniero Biomédico Especialista');
-  const [ingenieroRh, setIngenieroRh] = useState('');
-  const [ingenieroPass, setIngenieroPass] = useState('Hospital2026!');
+  // Step 3: Administrator / Master Account
+  const [adminNombre, setAdminNombre] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminCargo, setAdminCargo] = useState('Director de Ingeniería Biomédica');
+  const [adminRh, setAdminRh] = useState('');
+  const [adminPass, setAdminPass] = useState('');
+  const [adminPassConfirm, setAdminPassConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setEmpresaLogoUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+      setIsUploadingLogo(true);
+      try {
+        const downloadUrl = await uploadFileToStorage(file, 'company_logos');
+        setEmpresaLogoUrl(downloadUrl);
+      } catch (err) {
+        console.error('Error subiendo logo en asistente a Firebase Storage:', err);
+      } finally {
+        setIsUploadingLogo(false);
+      }
     }
   };
 
@@ -102,50 +116,66 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
     setStep(3);
   };
 
-  const handleFinish = (e: React.FormEvent) => {
+  const handleFinish = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ingenieroNombre.trim()) {
-      setErrorMsg('Por favor ingrese el nombre completo del ingeniero.');
+    if (!adminNombre.trim()) {
+      setErrorMsg('Por favor ingrese el nombre completo del administrador.');
       return;
     }
-    if (!ingenieroEmail.trim()) {
-      setErrorMsg('Por favor ingrese el correo institucional del ingeniero.');
+    if (!adminEmail.trim()) {
+      setErrorMsg('Por favor ingrese el correo institucional del administrador.');
       return;
     }
-    if (!ingenieroRh.trim()) {
-      setErrorMsg('Por favor ingrese la tarjeta profesional (RH) del ingeniero.');
+    const strength = checkPasswordStrength(adminPass);
+    if (!strength.isValid) {
+      setErrorMsg(strength.message);
+      return;
+    }
+    if (adminPass !== adminPassConfirm) {
+      setErrorMsg('Las contraseñas no coinciden. Por favor verifique.');
       return;
     }
 
-    completeOnboardingSetup(
-      {
-        nombre: empresaNombre.trim(),
-        nit: empresaNit.trim(),
-        eslogan: empresaEslogan.trim(),
-        logoUrl: empresaLogoUrl,
-        direccion: empresaDireccion.trim(),
-        ciudad: empresaCiudad.trim(),
-        correo: empresaCorreo.trim(),
-        telefonos: empresaTelefonos.trim(),
-        colorPrincipal: empresaColor,
-      },
-      {
-        name: hospitalNombre.trim(),
-        city: hospitalCiudad.trim() || 'Ciudad Principal',
-        department: hospitalDpto.trim() || 'Departamento',
-        address: hospitalDireccion.trim() || 'Sede Principal',
-        phone: hospitalTelefono.trim() || '(601) 000-0000',
-        nextConsecutive: hospitalConsecutivo || 1,
-      },
-      {
-        fullName: ingenieroNombre.trim(),
-        email: ingenieroEmail.trim(),
-        cargo: ingenieroCargo.trim() || 'Ingeniero Biomédico',
-        rh: ingenieroRh.trim(),
-        pass: ingenieroPass,
-      }
-    );
+    setIsSubmitting(true);
+    setErrorMsg(null);
+
+    try {
+      await completeCompanyAndAdminRegistration(
+        {
+          nombre: empresaNombre.trim(),
+          nit: empresaNit.trim(),
+          eslogan: empresaEslogan.trim(),
+          logoUrl: empresaLogoUrl,
+          direccion: empresaDireccion.trim(),
+          ciudad: empresaCiudad.trim(),
+          correo: empresaCorreo.trim(),
+          telefonos: empresaTelefonos.trim(),
+          colorPrincipal: empresaColor,
+        },
+        {
+          name: hospitalNombre.trim(),
+          city: hospitalCiudad.trim() || 'Ciudad Principal',
+          department: hospitalDpto.trim() || 'Departamento',
+          address: hospitalDireccion.trim() || 'Sede Principal',
+          phone: hospitalTelefono.trim() || '(601) 000-0000',
+          nextConsecutive: hospitalConsecutivo || 1,
+        },
+        {
+          fullName: adminNombre.trim(),
+          email: adminEmail.trim(),
+          cargo: adminCargo.trim() || 'Director de Ingeniería Biomédica',
+          rh: adminRh.trim() || undefined,
+          pass: adminPass,
+        }
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Error al guardar la configuración en Cloud Firestore.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const passwordStrength = checkPasswordStrength(adminPass);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto font-sans">
@@ -162,7 +192,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
             Bienvenido a BIO-TAG
           </h2>
           <p className="text-xs sm:text-sm text-slate-300 mt-1">
-            Configura en 3 pasos los datos de tu empresa, tu primer cliente hospitalario y el usuario de ingeniería biomédica.
+            Configura en 3 pasos los datos de tu empresa, tu primer cliente hospitalario y la cuenta del Administrador Principal.
           </p>
 
           {/* Stepper Bar */}
@@ -170,7 +200,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
             {[
               { num: 1, label: 'Datos Empresa', icon: Building2 },
               { num: 2, label: 'Primer Hospital', icon: Stethoscope },
-              { num: 3, label: 'Ingeniero Biomédico', icon: UserCheck },
+              { num: 3, label: 'Administrador', icon: UserCheck },
             ].map((s) => {
               const Icon = s.icon;
               const isDone = step > s.num;
@@ -278,15 +308,24 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
                       getCompanyInitials(empresaNombre)
                     )}
                   </div>
-                  <label className="flex-1 flex items-center justify-center gap-2 py-2 px-3 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer text-slate-600 dark:text-slate-400 transition-colors">
-                    <Upload className="w-4 h-4 text-slate-400" />
+                  <label className="flex-1 flex items-center justify-center gap-2 py-2 px-3 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer text-slate-600 dark:text-slate-400 transition-colors text-xs">
+                    {isUploadingLogo ? (
+                      <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4 text-slate-400" />
+                    )}
                     <span className="truncate">
-                      {empresaLogoUrl ? 'Cambiar imagen' : 'Subir archivo de logo'}
+                      {isUploadingLogo
+                        ? 'Guardando en Firebase Storage...'
+                        : empresaLogoUrl
+                        ? 'Cambiar imagen'
+                        : 'Subir archivo de logo'}
                     </span>
                     <input
                       type="file"
                       accept="image/png, image/jpeg, image/svg+xml"
                       onChange={handleLogoUpload}
+                      disabled={isUploadingLogo}
                       className="hidden"
                     />
                   </label>
@@ -485,32 +524,32 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
                 type="submit"
                 className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-semibold flex items-center gap-2 transition-colors text-xs"
               >
-                <span>Siguiente: Usuario Ingeniero</span>
+                <span>Siguiente: Administrador</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </form>
         )}
 
-        {/* STEP 3: Engineer User Profile */}
+        {/* STEP 3: Master Company Administrator Account */}
         {step === 3 && (
           <form onSubmit={handleFinish} className="p-6 space-y-4 text-xs">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
               <span className="font-bold text-sm text-slate-800 dark:text-slate-200">
-                Paso 3: Primer Usuario Ingeniero Biomédico
+                Paso 3: Cuenta del Administrador Principal
               </span>
-              <span className="text-[11px] text-slate-400">Firma técnica y RH</span>
+              <span className="text-[11px] text-teal-600 dark:text-teal-400 font-semibold">Credenciales Reales en Firebase Auth</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Nombre Completo del Ingeniero *
+                  Nombre Completo del Administrador *
                 </label>
                 <input
                   type="text"
-                  value={ingenieroNombre}
-                  onChange={(e) => setIngenieroNombre(e.target.value)}
+                  value={adminNombre}
+                  onChange={(e) => setAdminNombre(e.target.value)}
                   placeholder="Ej. Ing. Laura Marcela Rivas"
                   className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium text-slate-900 dark:text-white"
                   required
@@ -519,68 +558,151 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
 
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Tarjeta Profesional (RH) *
+                  Correo Electrónico Institucional (Login) *
                 </label>
                 <input
-                  type="text"
-                  value={ingenieroRh}
-                  onChange={(e) => setIngenieroRh(e.target.value)}
-                  placeholder="Ej. TP 8904-20"
-                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 font-mono text-slate-900 dark:text-white"
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  placeholder="admin@miempresa.com"
+                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 text-slate-900 dark:text-white"
                   required
                 />
-                <span className="text-[11px] text-slate-500 mt-1 block">
-                  Aparecerá en el pie de los reportes técnicos oficiales.
-                </span>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Correo Electrónico Institucional *
+                  Cargo / Rol
                 </label>
                 <input
-                  type="email"
-                  value={ingenieroEmail}
-                  onChange={(e) => setIngenieroEmail(e.target.value)}
-                  placeholder="ingeniero@miempresa.com"
-                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  required
+                  type="text"
+                  value={adminCargo}
+                  onChange={(e) => setAdminCargo(e.target.value)}
+                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
                 />
               </div>
 
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Cargo
+                  Tarjeta Profesional (RH) (Opcional)
                 </label>
                 <input
                   type="text"
-                  value={ingenieroCargo}
-                  onChange={(e) => setIngenieroCargo(e.target.value)}
-                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                  value={adminRh}
+                  onChange={(e) => setAdminRh(e.target.value)}
+                  placeholder="Ej. TP 8904-20"
+                  className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                Contraseña de Acceso
-              </label>
-              <input
-                type="text"
-                value={ingenieroPass}
-                onChange={(e) => setIngenieroPass(e.target.value)}
-                className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Password */}
+              <div>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  Contraseña Real de Acceso *
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={adminPass}
+                    onChange={(e) => setAdminPass(e.target.value)}
+                    placeholder="Mín. 8 caract., letras y números"
+                    className="w-full py-2 pl-9 pr-10 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg"
+                    title={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm Password */}
+              <div>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  Confirmar Contraseña *
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPasswordConfirm ? 'text' : 'password'}
+                    value={adminPassConfirm}
+                    onChange={(e) => setAdminPassConfirm(e.target.value)}
+                    placeholder="Repite la contraseña exacta"
+                    className="w-full py-2 pl-9 pr-10 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordConfirm((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg"
+                    title={showPasswordConfirm ? 'Ocultar contraseña' : 'Ver contraseña'}
+                  >
+                    {showPasswordConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
             </div>
+
+            {/* Password Strength Indicator */}
+            {adminPass && (
+              <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-medium text-slate-600 dark:text-slate-300">
+                    Seguridad de la contraseña:
+                  </span>
+                  <span
+                    className={`font-bold ${
+                      passwordStrength.score <= 1
+                        ? 'text-rose-500'
+                        : passwordStrength.score === 2
+                        ? 'text-amber-500'
+                        : passwordStrength.score === 3
+                        ? 'text-teal-600 dark:text-teal-400'
+                        : 'text-emerald-500'
+                    }`}
+                  >
+                    {passwordStrength.message}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex gap-1">
+                  {[1, 2, 3, 4].map((stepIdx) => (
+                    <div
+                      key={stepIdx}
+                      className={`h-full flex-1 rounded-full transition-all ${
+                        passwordStrength.score >= stepIdx
+                          ? passwordStrength.score <= 1
+                            ? 'bg-rose-500'
+                            : passwordStrength.score === 2
+                            ? 'bg-amber-500'
+                            : passwordStrength.score === 3
+                            ? 'bg-teal-500'
+                            : 'bg-emerald-500'
+                          : 'bg-transparent'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Debe tener al menos 8 caracteres con combinación de letras y números. Guardada cifrada por Firebase Auth.
+                </p>
+              </div>
+            )}
 
             <div className="p-3 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-900 rounded-xl text-teal-900 dark:text-teal-200 text-xs flex items-start gap-2.5">
               <ShieldCheck className="w-4 h-4 text-teal-600 mt-0.5 shrink-0" />
               <div>
-                <p className="font-semibold">Seguridad y aislamiento:</p>
+                <p className="font-semibold">Cuenta Maestra de Administrador:</p>
                 <p className="text-[11px] text-teal-800 dark:text-teal-300 mt-0.5">
-                  El rol de Ingeniero es el único autorizado para crear equipos, editar hojas de vida y radicar reportes. También se creará una cuenta administradora para gestión de usuarios.
+                  Esta cuenta será la única con permiso para crear usuarios de ingeniería, enfermería y otros hospitales. Una vez creada, el registro abierto quedará bloqueado permanentemente.
                 </p>
               </div>
             </div>
@@ -589,16 +711,22 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
               <button
                 type="button"
                 onClick={() => setStep(2)}
+                disabled={isSubmitting}
                 className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 Atrás
               </button>
               <button
                 type="submit"
-                className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold flex items-center gap-2 transition-colors text-xs shadow-md shadow-teal-700/20"
+                disabled={isSubmitting || !passwordStrength.isValid}
+                className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold flex items-center gap-2 transition-colors text-xs shadow-md shadow-teal-700/20"
               >
-                <Sparkles className="w-4 h-4" />
-                <span>Finalizar y Entrar a BIO-TAG</span>
+                {isSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+                <span>{isSubmitting ? 'Creando cuenta en Firebase...' : 'Finalizar y Entrar a BIO-TAG'}</span>
               </button>
             </div>
           </form>

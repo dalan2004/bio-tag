@@ -17,17 +17,20 @@ import {
   PlusCircle,
   ShieldCheck,
   ChevronRight,
+  KeyRound,
 } from 'lucide-react';
 import { ActiveTab } from '../../types/biomedical';
 
 interface AppSidebarProps {
-  onOpenLoginModal: () => void;
+  onOpenLoginModal?: () => void;
   onOpenNfcScanner: () => void;
+  onOpenChangePassword?: () => void;
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
   onOpenLoginModal,
   onOpenNfcScanner,
+  onOpenChangePassword,
 }) => {
   const {
     companyProfile,
@@ -164,13 +167,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 </span>
               )}
             </div>
-            <button
-              onClick={logout}
-              title="Cerrar sesión"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors shrink-0"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {onOpenChangePassword && (
+                <button
+                  onClick={onOpenChangePassword}
+                  title="Cambiar mi contraseña"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-950/40 transition-colors"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                onClick={logout}
+                title="Cerrar sesión"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         ) : (
           <button

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import {
   BiomedicalEquipment,
   MaintenanceRecord,
@@ -22,22 +22,47 @@ import {
   INITIAL_AUDIT_LOGS,
   INITIAL_INCIDENTS,
 } from '../data/initialData';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import {
+  auth,
+  db,
+  handleFirestoreError,
+  OperationType,
+  testFirestoreConnection,
+  createSecondaryUser,
+  sendPasswordReset,
+  changeUserPassword,
+  logoutAndClearCache,
+} from '../firebase';
 import {
   signInWithEmailAndPassword,
-  signOut as fbSignOut,
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
   User as FirebaseUser,
 } from 'firebase/auth';
 import {
   doc,
   setDoc,
+  collection,
+  onSnapshot,
+  updateDoc,
 } from 'firebase/firestore';
 
 interface BiomedicalContextType {
+  // Loading & Sync
+  isAuthLoading: boolean;
+  isInitialDataLoaded: boolean;
+  hasAnyAdmin: boolean;
+
+  // Session & Security
+  sessionExpiredMessage: string | null;
+  setSessionExpiredMessage: (msg: string | null) => void;
+  failedLoginAttempts: number;
+  isLockedOut: boolean;
+  lockoutRemainingSeconds: number;
+
   // Company & White-Label
   companyProfile: CompanyProfile;
-  updateCompanyProfile: (data: Partial<CompanyProfile>) => void;
+  updateCompanyProfile: (data: Partial<CompanyProfile>) => Promise<void>;
 
   // Auth
   fbUser: FirebaseUser | null;
@@ -50,8 +75,9 @@ interface BiomedicalContextType {
   isConsulta: boolean;
   loginError: string | null;
   loginWithEmail: (email: string, pass: string) => Promise<boolean>;
-  quickLoginAs: (profileId: string) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
+  sendUserPasswordReset: (email: string) => Promise<void>;
+  changePassword: (currentPass: string, newPass: string) => Promise<void>;
 
   // Multi-Institution & Data
   institutions: Institution[];
@@ -69,14 +95,14 @@ interface BiomedicalContextType {
   scanFeedback: string | null;
   globalSearchQuery: string;
 
-  // Onboarding Wizard
+  // Onboarding Wizard (Only available if no admin exists)
   isSetupWizardOpen: boolean;
   setIsSetupWizardOpen: (open: boolean) => void;
-  completeOnboardingSetup: (
+  completeCompanyAndAdminRegistration: (
     company: Partial<CompanyProfile>,
     institution: { name: string; city: string; department: string; address: string; phone: string; nextConsecutive: number },
-    engineer: { fullName: string; email: string; cargo: string; rh: string; pass: string }
-  ) => void;
+    adminData: { fullName: string; email: string; pass: string; cargo?: string; rh?: string }
+  ) => Promise<void>;
 
   // Direct Mobile Scan Mode (/e/[TOKEN])
   isDirectScanMode: boolean;
@@ -94,19 +120,19 @@ interface BiomedicalContextType {
   setScanFeedback: (msg: string | null) => void;
   setGlobalSearchQuery: (query: string) => void;
 
-  // CRUD & Operations (Protected by Role)
-  addEquipment: (eq: BiomedicalEquipment) => void;
-  updateEquipment: (eq: BiomedicalEquipment, changeSummary?: string) => void;
-  addMaintenance: (record: Omit<MaintenanceRecord, 'id' | 'consecutivo' | 'numeroReporte'>) => string;
-  addIncident: (incident: Omit<IncidentReport, 'id' | 'createdAt'>) => void;
-  bindNewTag: (equipmentId: string) => string;
-  deactivateTag: (equipmentId: string) => void;
+  // CRUD & Operations (Persisted directly to Cloud Firestore)
+  addEquipment: (eq: BiomedicalEquipment) => Promise<void>;
+  updateEquipment: (eq: BiomedicalEquipment, changeSummary?: string) => Promise<void>;
+  addMaintenance: (record: Omit<MaintenanceRecord, 'id' | 'consecutivo' | 'numeroReporte'>) => Promise<string>;
+  addIncident: (incident: Omit<IncidentReport, 'id' | 'createdAt'>) => Promise<void>;
+  bindNewTag: (equipmentId: string) => Promise<string>;
+  deactivateTag: (equipmentId: string) => Promise<void>;
 
   // Hospital & Company Admin Actions
-  createHospitalUser: (userData: Omit<UserProfile, 'id' | 'createdAt'>) => void;
-  toggleUserActive: (userId: string) => void;
-  createInstitution: (inst: Omit<Institution, 'id'>) => string;
-  updateHospitalSettings: (institutionId: string, settings: { requireLoginForScan?: boolean }) => void;
+  createHospitalUser: (userData: Omit<UserProfile, 'id' | 'createdAt'>) => Promise<void>;
+  toggleUserActive: (userId: string) => Promise<void>;
+  createInstitution: (inst: Omit<Institution, 'id'>) => Promise<string>;
+  updateHospitalSettings: (institutionId: string, settings: { requireLoginForScan?: boolean }) => Promise<void>;
 
   // Alerts & Notifications
   getOverdueOrUpcomingEquipments: () => {
@@ -129,103 +155,43 @@ interface BiomedicalContextType {
 
 const BiomedicalContext = createContext<BiomedicalContextType | undefined>(undefined);
 
-// Storage keys for BIO-TAG
-const STORAGE_KEY_COMPANY = 'custodiamed_company';
-const STORAGE_KEY_INSTITUTIONS = 'custodiamed_institutions';
-const STORAGE_KEY_USERS = 'custodiamed_users';
-const STORAGE_KEY_EQUIPMENT = 'custodiamed_equipments';
-const STORAGE_KEY_MAINTENANCE = 'custodiamed_maintenances';
-const STORAGE_KEY_INCIDENTS = 'custodiamed_incidents';
-const STORAGE_KEY_AUDIT = 'custodiamed_audit';
-const STORAGE_KEY_ACTIVE_USER = 'custodiamed_active_profile_id';
-const STORAGE_KEY_THEME = 'custodiamed_theme';
-const STORAGE_KEY_VERSION = 'custodiamed_v1_clean';
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_SECONDS = 60;
 
 export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Purge any old sample data from legacy versions on first launch
-  useEffect(() => {
-    const isCleaned = localStorage.getItem(STORAGE_KEY_VERSION);
-    if (!isCleaned) {
-      localStorage.removeItem('biomed_v2_equipments');
-      localStorage.removeItem('biomed_v2_maintenances');
-      localStorage.removeItem('biomed_v2_users');
-      localStorage.removeItem('biomed_v2_institutions');
-      localStorage.removeItem('biomed_v2_incidents');
-      localStorage.removeItem('biomed_v2_audit');
-      localStorage.removeItem('biomed_v2_active_profile_id');
-      localStorage.setItem(STORAGE_KEY_VERSION, 'true');
-    }
-  }, []);
+  // Loading & Initialization state
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isInitialDataLoaded, setIsInitialDataLoaded] = useState<boolean>(false);
 
-  // Company Profile (White Label)
-  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_COMPANY);
-    return s ? JSON.parse(s) : INITIAL_COMPANY_PROFILE;
-  });
+  // Invalidation & Rate-Limiting State
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState<string | null>(null);
+  const [failedLoginAttempts, setFailedLoginAttempts] = useState<number>(0);
+  const [lockoutEndTime, setLockoutEndTime] = useState<number | null>(null);
+  const [lockoutRemainingSeconds, setLockoutRemainingSeconds] = useState<number>(0);
 
-  // Data State
-  const [institutions, setInstitutions] = useState<Institution[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_INSTITUTIONS);
-    return s ? JSON.parse(s) : INITIAL_INSTITUTIONS;
-  });
-
-  const [users, setUsers] = useState<UserProfile[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_USERS);
-    return s ? JSON.parse(s) : INITIAL_USERS;
-  });
-
-  const [equipments, setEquipments] = useState<BiomedicalEquipment[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_EQUIPMENT);
-    return s ? JSON.parse(s) : INITIAL_EQUIPMENT;
-  });
-
-  const [maintenances, setMaintenances] = useState<MaintenanceRecord[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_MAINTENANCE);
-    return s ? JSON.parse(s) : INITIAL_MAINTENANCE_RECORDS;
-  });
-
-  const [incidents, setIncidents] = useState<IncidentReport[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_INCIDENTS);
-    return s ? JSON.parse(s) : INITIAL_INCIDENTS;
-  });
-
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    const s = localStorage.getItem(STORAGE_KEY_AUDIT);
-    return s ? JSON.parse(s) : INITIAL_AUDIT_LOGS;
-  });
-
+  // Core Data States - Populated exclusively from Firestore
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(INITIAL_COMPANY_PROFILE);
+  const [institutions, setInstitutions] = useState<Institution[]>(INITIAL_INSTITUTIONS);
+  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [equipments, setEquipments] = useState<BiomedicalEquipment[]>(INITIAL_EQUIPMENT);
+  const [maintenances, setMaintenances] = useState<MaintenanceRecord[]>(INITIAL_MAINTENANCE_RECORDS);
+  const [incidents, setIncidents] = useState<IncidentReport[]>(INITIAL_INCIDENTS);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_AUDIT_LOGS);
   const [emailNotifications, setEmailNotifications] = useState<EmailNotification[]>([]);
 
   // Auth State
   const [fbUser, setFbUser] = useState<FirebaseUser | null>(null);
-  const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(() => {
-    const savedId = localStorage.getItem(STORAGE_KEY_ACTIVE_USER);
-    if (savedId) {
-      const match = users.find((u) => u.id === savedId);
-      if (match) return match;
-    }
-    return users.length > 0 ? users[0] : null;
-  });
+  const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // UI Navigation
-  const [activeEquipmentId, setActiveEquipmentId] = useState<string>(() => {
-    return equipments.length > 0 ? equipments[0].id : '';
-  });
+  const [activeEquipmentId, setActiveEquipmentId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<ActiveTab>('inicio');
   const [scanFeedback, setScanFeedback] = useState<string | null>(null);
   const [globalSearchQuery, setGlobalSearchQuery] = useState<string>('');
 
-  // Setup Wizard State
-  const [isSetupWizardOpen, setIsSetupWizardOpen] = useState<boolean>(() => {
-    // If company has no name or there are no institutions/users, open wizard automatically
-    const savedCompany = localStorage.getItem(STORAGE_KEY_COMPANY);
-    const parsedComp = savedCompany ? JSON.parse(savedCompany) : null;
-    const hasCompany = Boolean(parsedComp?.nombre?.trim());
-    const savedInsts = localStorage.getItem(STORAGE_KEY_INSTITUTIONS);
-    const hasInsts = savedInsts ? JSON.parse(savedInsts).length > 0 : false;
-    return !hasCompany || !hasInsts;
-  });
+  // Setup Wizard State (Only opens when there are no administrators registered)
+  const [isSetupWizardOpen, setIsSetupWizardOpen] = useState<boolean>(false);
 
   // Direct Mobile Scan State (/e/[TOKEN])
   const [isDirectScanMode, setIsDirectScanMode] = useState(false);
@@ -233,72 +199,50 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Theme
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_THEME);
-    if (saved) return saved === 'dark';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  // Apply Theme
+  // Track initial collections loaded counter
+  const loadedCollectionsCount = useRef(0);
+
+  // Rate Limiting Countdown Timer
+  useEffect(() => {
+    if (!lockoutEndTime) {
+      setLockoutRemainingSeconds(0);
+      return;
+    }
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.ceil((lockoutEndTime - now) / 1000));
+      setLockoutRemainingSeconds(remaining);
+      if (remaining <= 0) {
+        setLockoutEndTime(null);
+        setFailedLoginAttempts(0);
+        setLoginError(null);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutEndTime]);
+
+  const isLockedOut = lockoutRemainingSeconds > 0;
+
+  // Check initial Firestore connection
+  useEffect(() => {
+    testFirestoreConnection();
+  }, []);
+
+  // Theme handling
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem(STORAGE_KEY_THEME, 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem(STORAGE_KEY_THEME, 'light');
     }
   }, [darkMode]);
-
-  // Persist State
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_COMPANY, JSON.stringify(companyProfile));
-  }, [companyProfile]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_INSTITUTIONS, JSON.stringify(institutions));
-  }, [institutions]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_EQUIPMENT, JSON.stringify(equipments));
-  }, [equipments]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_MAINTENANCE, JSON.stringify(maintenances));
-  }, [maintenances]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(incidents));
-  }, [incidents]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(auditLogs));
-  }, [auditLogs]);
-
-  useEffect(() => {
-    if (currentUserProfile) {
-      localStorage.setItem(STORAGE_KEY_ACTIVE_USER, currentUserProfile.id);
-    } else {
-      localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
-    }
-  }, [currentUserProfile]);
-
-  // Listen to Firebase Auth state
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setFbUser(user);
-      if (user && user.email) {
-        const found = users.find((u) => u.email.toLowerCase() === user.email?.toLowerCase());
-        if (found) {
-          setCurrentUserProfile(found);
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, [users]);
 
   // Sync activeEquipmentId when equipment list changes
   useEffect(() => {
@@ -356,8 +300,180 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
   }, [equipments]);
 
+  // ==========================================
+  // REAL-TIME FIRESTORE SYNCHRONIZATION
+  // ==========================================
+  useEffect(() => {
+    const checkAllLoaded = () => {
+      loadedCollectionsCount.current += 1;
+      if (loadedCollectionsCount.current >= 4) {
+        setIsInitialDataLoaded(true);
+      }
+    };
+
+    // 1. Company Profile listener
+    const unsubCompany = onSnapshot(
+      doc(db, 'companies', 'main'),
+      (snap) => {
+        if (snap.exists()) {
+          setCompanyProfile(snap.data() as CompanyProfile);
+        }
+        checkAllLoaded();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'companies/main');
+        checkAllLoaded();
+      }
+    );
+
+    // 2. Institutions listener
+    const unsubInstitutions = onSnapshot(
+      collection(db, 'institutions'),
+      (snapshot) => {
+        const list: Institution[] = [];
+        snapshot.forEach((d) => list.push(d.data() as Institution));
+        setInstitutions(list);
+        checkAllLoaded();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'institutions');
+        checkAllLoaded();
+      }
+    );
+
+    // 3. Users listener
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const list: UserProfile[] = [];
+        snapshot.forEach((d) => list.push(d.data() as UserProfile));
+        setUsers(list);
+        checkAllLoaded();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'users');
+        checkAllLoaded();
+      }
+    );
+
+    // 4. Equipment listener
+    const unsubEquipments = onSnapshot(
+      collection(db, 'equipments'),
+      (snapshot) => {
+        const list: BiomedicalEquipment[] = [];
+        snapshot.forEach((d) => list.push(d.data() as BiomedicalEquipment));
+        setEquipments(list);
+        checkAllLoaded();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'equipments');
+        checkAllLoaded();
+      }
+    );
+
+    // 5. Maintenances listener
+    const unsubMaintenances = onSnapshot(
+      collection(db, 'maintenances'),
+      (snapshot) => {
+        const list: MaintenanceRecord[] = [];
+        snapshot.forEach((d) => list.push(d.data() as MaintenanceRecord));
+        setMaintenances(list);
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'maintenances');
+      }
+    );
+
+    // 6. Incidents listener
+    const unsubIncidents = onSnapshot(
+      collection(db, 'incidents'),
+      (snapshot) => {
+        const list: IncidentReport[] = [];
+        snapshot.forEach((d) => list.push(d.data() as IncidentReport));
+        setIncidents(list);
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'incidents');
+      }
+    );
+
+    // 7. Audit Logs listener
+    const unsubAudit = onSnapshot(
+      collection(db, 'audit_logs'),
+      (snapshot) => {
+        const list: AuditLog[] = [];
+        snapshot.forEach((d) => list.push(d.data() as AuditLog));
+        setAuditLogs(list);
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'audit_logs');
+      }
+    );
+
+    return () => {
+      unsubCompany();
+      unsubInstitutions();
+      unsubUsers();
+      unsubEquipments();
+      unsubMaintenances();
+      unsubIncidents();
+      unsubAudit();
+    };
+  }, []);
+
+  // Determine if the system already has any administrator registered
+  const hasAnyAdmin = useMemo(() => {
+    return users.some((u) => (u.role === 'admin_hospital' || u.role === 'ingeniero') && u.active);
+  }, [users]);
+
+  // ==========================================
+  // FIREBASE AUTH LISTENER (browserLocalPersistence)
+  // ==========================================
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFbUser(user);
+      if (user && user.email) {
+        const normalizedEmail = user.email.toLowerCase();
+        const found = users.find(
+          (u) => u.id === user.uid || u.email.toLowerCase() === normalizedEmail
+        );
+        if (found) {
+          if (!found.active) {
+            // Deactivated user: forcibly terminate session
+            logoutAndClearCache().catch(() => {});
+            setCurrentUserProfile(null);
+            setSessionExpiredMessage('Tu cuenta ha sido desactivada por el Administrador.');
+          } else {
+            setCurrentUserProfile(found);
+          }
+        }
+      } else {
+        if (!user) {
+          setCurrentUserProfile(null);
+        }
+      }
+      setIsAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [users]);
+
+  // Live check: If the active user profile is deactivated while currently browsing, logout immediately
+  useEffect(() => {
+    if (currentUserProfile && users.length > 0) {
+      const match = users.find((u) => u.id === currentUserProfile.id);
+      if (match && !match.active) {
+        logoutAndClearCache().catch(() => {});
+        setCurrentUserProfile(null);
+        setSessionExpiredMessage('Tu cuenta ha sido desactivada por el Administrador.');
+      } else if (match) {
+        setCurrentUserProfile(match);
+      }
+    }
+  }, [users, currentUserProfile]);
+
   // Derived Auth Checks
-  const isAuthenticated = Boolean(currentUserProfile);
+  const isAuthenticated = Boolean(currentUserProfile && fbUser);
   const authRole = currentUserProfile?.role || null;
   const isIngeniero = currentUserProfile?.active === true && authRole === 'ingeniero';
   const isAdminHospital = currentUserProfile?.active === true && authRole === 'admin_hospital';
@@ -397,70 +513,135 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const toggleDarkMode = () => setDarkMode((p) => !p);
 
-  // Update Company Profile (Only Admin)
-  const updateCompanyProfile = (data: Partial<CompanyProfile>) => {
-    setCompanyProfile((prev) => {
-      const updated = {
-        ...prev,
-        ...data,
-        updatedAt: new Date().toISOString(),
-      };
-      try {
-        setDoc(doc(db, 'company_profile', 'main'), updated).catch(() => {});
-      } catch {}
-      return updated;
-    });
-    setScanFeedback('Datos corporativos de la empresa actualizados.');
-    setTimeout(() => setScanFeedback(null), 3500);
+  // Update Company Profile (Only Admin) - Persisted to Firestore
+  const updateCompanyProfile = async (data: Partial<CompanyProfile>) => {
+    const updated: CompanyProfile = {
+      ...companyProfile,
+      ...data,
+      id: 'main',
+      updatedAt: new Date().toISOString(),
+    };
+
+    setCompanyProfile(updated);
+
+    try {
+      await setDoc(doc(db, 'companies', 'main'), updated);
+      await setDoc(doc(db, 'company_profile', 'main'), updated).catch(() => {});
+      setScanFeedback('Guardado: Datos corporativos de la empresa actualizados en Firestore.');
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.WRITE, 'companies/main');
+      setScanFeedback(`Error al guardar en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Login handler
+  // Login handler with Firebase Authentication, rate limiting, and zero credential leakage
   const loginWithEmail = async (email: string, pass: string): Promise<boolean> => {
     setLoginError(null);
+    setSessionExpiredMessage(null);
+
+    // Check if lockout is active
+    if (lockoutEndTime && Date.now() < lockoutEndTime) {
+      const rem = Math.ceil((lockoutEndTime - Date.now()) / 1000);
+      setLoginError(`Acceso bloqueado temporalmente por seguridad. Espera ${rem} segundos.`);
+      return false;
+    }
+
     try {
-      const profile = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (!profile) {
-        setLoginError('No existe ningún usuario registrado con ese correo institucional.');
-        return false;
-      }
-      if (!profile.active) {
-        setLoginError('Esta cuenta ha sido desactivada por el Administrador del Hospital.');
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // Authenticate against Firebase Auth
+      const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, pass);
+      const user = userCredential.user;
+
+      // Find user profile in Firestore
+      const userProfile = users.find(
+        (u) => u.id === user.uid || u.email.toLowerCase() === normalizedEmail
+      );
+
+      if (userProfile && !userProfile.active) {
+        await logoutAndClearCache();
+        setLoginError('Tu cuenta ha sido desactivada por el Administrador.');
         return false;
       }
 
-      try {
-        await signInWithEmailAndPassword(auth, email.trim(), pass);
-      } catch (fbErr) {
-        console.warn('Firebase Auth sign in fallback to profile verification:', fbErr);
+      // Successful login resets rate-limiting counter
+      setFailedLoginAttempts(0);
+      setLockoutEndTime(null);
+
+      if (userProfile) {
+        setCurrentUserProfile(userProfile);
       }
 
-      setCurrentUserProfile(profile);
-      setScanFeedback(`Sesión iniciada: ${profile.fullName} (${profile.role.toUpperCase()})`);
-      setTimeout(() => setScanFeedback(null), 4000);
+      setScanFeedback('Sesión iniciada correctamente.');
+      setTimeout(() => setScanFeedback(null), 3000);
       return true;
-    } catch (err) {
-      setLoginError(err instanceof Error ? err.message : 'Error al iniciar sesión.');
+    } catch (authErr: any) {
+      console.warn('Authentication attempt failed:', authErr?.code);
+
+      // Increment failed attempts
+      const newAttempts = failedLoginAttempts + 1;
+      setFailedLoginAttempts(newAttempts);
+
+      if (newAttempts >= MAX_FAILED_ATTEMPTS) {
+        const lockoutTime = Date.now() + LOCKOUT_DURATION_SECONDS * 1000;
+        setLockoutEndTime(lockoutTime);
+        setLoginError(
+          `Has superado los ${MAX_FAILED_ATTEMPTS} intentos fallidos. Acceso bloqueado por ${LOCKOUT_DURATION_SECONDS} segundos.`
+        );
+      } else {
+        // Enforce generic message without indicating whether email or password was wrong
+        setLoginError('Correo o contraseña incorrectos.');
+      }
+
       return false;
     }
   };
 
-  const quickLoginAs = (profileId: string) => {
-    const profile = users.find((u) => u.id === profileId);
-    if (profile) {
-      setCurrentUserProfile(profile);
-      setLoginError(null);
-      setScanFeedback(`Sesión iniciada como: ${profile.fullName} (${profile.role.toUpperCase()})`);
-      setTimeout(() => setScanFeedback(null), 3500);
+  // Complete sign out: clears auth, cleans state and memory, terminates Firestore and clears IndexedDb cache
+  const logout = async () => {
+    try {
+      setScanFeedback('Cerrando sesión de forma segura...');
+      await logoutAndClearCache();
+    } catch (err) {
+      console.warn('Sign out warning:', err);
+    } finally {
+      setCurrentUserProfile(null);
+      setFbUser(null);
+      setEquipments([]);
+      setMaintenances([]);
+      setIncidents([]);
+      setAuditLogs([]);
+      setInstitutions([]);
+      setUsers([]);
+      setSessionExpiredMessage(null);
+      // Clean reload to login screen
+      window.location.href = '/';
     }
   };
 
-  const logout = async () => {
+  // Send password reset email
+  const sendUserPasswordReset = async (email: string): Promise<void> => {
     try {
-      await fbSignOut(auth);
-    } catch {}
-    setCurrentUserProfile(null);
-    setScanFeedback('Sesión cerrada.');
-    setTimeout(() => setScanFeedback(null), 3000);
+      await sendPasswordReset(email);
+      setScanFeedback(`Correo de restablecimiento enviado a ${email}.`);
+      setTimeout(() => setScanFeedback(null), 4000);
+    } catch (err: any) {
+      console.error('Password reset dispatch error:', err);
+      throw err;
+    }
+  };
+
+  // Change current user's password
+  const changePassword = async (currentPass: string, newPass: string): Promise<void> => {
+    try {
+      await changeUserPassword(currentPass, newPass);
+      setScanFeedback('Contraseña actualizada exitosamente.');
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      throw err;
+    }
   };
 
   const enterDirectScanByToken = (token: string) => {
@@ -536,15 +717,11 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return list[0];
   };
 
-  // Add Equipment (Only Ingeniero)
-  const addEquipment = (eq: BiomedicalEquipment) => {
+  // Add Equipment (Only Ingeniero) - Persisted directly to Firestore
+  const addEquipment = async (eq: BiomedicalEquipment) => {
     if (!isIngeniero && users.length > 0) {
-      alert('Solo los usuarios con rol de Ingeniero Biomédico pueden registrar equipos.');
-      return;
+      throw new Error('Solo los usuarios con rol de Ingeniero Biomédico pueden registrar equipos.');
     }
-
-    setEquipments((prev) => [eq, ...prev]);
-    setActiveEquipmentId(eq.id);
 
     const log: AuditLog = {
       id: `audit-${Date.now()}`,
@@ -557,24 +734,24 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       changedByRh: currentUserProfile?.rh || 'TP N/A',
       summary: `Creación de equipo ${eq.nombre} (${eq.codigoActivo}) Serie: ${eq.serie}.`,
     };
-    setAuditLogs((prev) => [log, ...prev]);
 
     try {
-      setDoc(doc(db, 'equipments', eq.id), eq).catch((err) =>
-        handleFirestoreError(err, OperationType.CREATE, `equipments/${eq.id}`)
-      );
-      setDoc(doc(db, 'audit_logs', log.id), log).catch(() => {});
-    } catch {}
-
-    setScanFeedback(`Equipo ${eq.nombre} registrado con éxito.`);
-    setTimeout(() => setScanFeedback(null), 3500);
+      await setDoc(doc(db, 'equipments', eq.id), eq);
+      await setDoc(doc(db, 'audit_logs', log.id), log);
+      setActiveEquipmentId(eq.id);
+      setScanFeedback(`Guardado: Equipo ${eq.nombre} registrado con éxito en Firestore.`);
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.CREATE, `equipments/${eq.id}`);
+      setScanFeedback(`Error al guardar en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Update Equipment (Only Ingeniero)
-  const updateEquipment = (eq: BiomedicalEquipment, changeSummary?: string) => {
+  // Update Equipment (Only Ingeniero) - Persisted directly to Firestore
+  const updateEquipment = async (eq: BiomedicalEquipment, changeSummary?: string) => {
     if (!isIngeniero && users.length > 0) {
-      alert('Solo los usuarios con rol de Ingeniero Biomédico pueden editar equipos.');
-      return;
+      throw new Error('Solo los usuarios con rol de Ingeniero Biomédico pueden editar equipos.');
     }
 
     const updatedEq: BiomedicalEquipment = {
@@ -582,8 +759,6 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       updatedAt: new Date().toISOString().slice(0, 10),
       lastUpdatedBy: `${currentUserProfile?.fullName || 'Ingeniero'} (${currentUserProfile?.rh || ''})`,
     };
-
-    setEquipments((prev) => prev.map((item) => (item.id === eq.id ? updatedEq : item)));
 
     const log: AuditLog = {
       id: `audit-${Date.now()}`,
@@ -596,24 +771,23 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       changedByRh: currentUserProfile?.rh || 'TP N/A',
       summary: changeSummary || `Actualización de ficha técnica / hoja de vida del equipo ${eq.codigoActivo}.`,
     };
-    setAuditLogs((prev) => [log, ...prev]);
 
     try {
-      setDoc(doc(db, 'equipments', eq.id), updatedEq).catch((err) =>
-        handleFirestoreError(err, OperationType.UPDATE, `equipments/${eq.id}`)
-      );
-      setDoc(doc(db, 'audit_logs', log.id), log).catch(() => {});
-    } catch {}
-
-    setScanFeedback(`Hoja de vida actualizada para ${eq.nombre}.`);
-    setTimeout(() => setScanFeedback(null), 3500);
+      await setDoc(doc(db, 'equipments', eq.id), updatedEq);
+      await setDoc(doc(db, 'audit_logs', log.id), log);
+      setScanFeedback(`Guardado: Hoja de vida de ${eq.nombre} actualizada en Firestore.`);
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.UPDATE, `equipments/${eq.id}`);
+      setScanFeedback(`Error al guardar en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Bind New NFC / QR Tag (Only Ingeniero)
-  const bindNewTag = (equipmentId: string): string => {
+  // Bind New NFC / QR Tag (Only Ingeniero) - Persisted to Firestore
+  const bindNewTag = async (equipmentId: string): Promise<string> => {
     if (!isIngeniero && users.length > 0) {
-      alert('Solo los ingenieros biomédicos pueden vincular etiquetas NFC / QR.');
-      return '';
+      throw new Error('Solo los ingenieros biomédicos pueden vincular etiquetas NFC / QR.');
     }
 
     const randomBytes = new Uint8Array(12);
@@ -634,8 +808,6 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       lastUpdatedBy: `${currentUserProfile?.fullName || 'Ingeniero'} (${currentUserProfile?.rh || ''})`,
     };
 
-    setEquipments((prev) => prev.map((e) => (e.id === equipmentId ? updated : e)));
-
     const log: AuditLog = {
       id: `audit-${Date.now()}`,
       equipmentId,
@@ -647,23 +819,24 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       changedByRh: currentUserProfile?.rh || 'TP N/A',
       summary: `Generación y vinculación de nueva etiqueta NFC/QR con token seguro: ${newToken}.`,
     };
-    setAuditLogs((prev) => [log, ...prev]);
 
     try {
-      setDoc(doc(db, 'equipments', equipmentId), updated).catch(() => {});
-      setDoc(doc(db, 'audit_logs', log.id), log).catch(() => {});
-    } catch {}
-
-    setScanFeedback('Nueva etiqueta vinculada con token de 24 caracteres.');
-    setTimeout(() => setScanFeedback(null), 3500);
-    return newToken;
+      await setDoc(doc(db, 'equipments', equipmentId), updated);
+      await setDoc(doc(db, 'audit_logs', log.id), log);
+      setScanFeedback('Guardado: Nueva etiqueta vinculada con token de 24 caracteres en Firestore.');
+      setTimeout(() => setScanFeedback(null), 3500);
+      return newToken;
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.UPDATE, `equipments/${equipmentId}`);
+      setScanFeedback(`Error al guardar etiqueta en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Deactivate Tag (Only Ingeniero)
-  const deactivateTag = (equipmentId: string) => {
+  // Deactivate Tag (Only Ingeniero) - Persisted to Firestore
+  const deactivateTag = async (equipmentId: string): Promise<void> => {
     if (!isIngeniero && users.length > 0) {
-      alert('Solo los ingenieros biomédicos pueden desactivar etiquetas.');
-      return;
+      throw new Error('Solo los ingenieros biomédicos pueden desactivar etiquetas.');
     }
 
     const target = equipments.find((e) => e.id === equipmentId);
@@ -676,8 +849,6 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       lastUpdatedBy: `${currentUserProfile?.fullName || 'Ingeniero'} (${currentUserProfile?.rh || ''})`,
     };
 
-    setEquipments((prev) => prev.map((e) => (e.id === equipmentId ? updated : e)));
-
     const log: AuditLog = {
       id: `audit-${Date.now()}`,
       equipmentId,
@@ -689,36 +860,30 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       changedByRh: currentUserProfile?.rh || 'TP N/A',
       summary: `Etiqueta NFC/QR (${target.tagToken}) desactivada por pérdida o daño físico.`,
     };
-    setAuditLogs((prev) => [log, ...prev]);
 
     try {
-      setDoc(doc(db, 'equipments', equipmentId), updated).catch(() => {});
-      setDoc(doc(db, 'audit_logs', log.id), log).catch(() => {});
-    } catch {}
-
-    setScanFeedback('Etiqueta desactivada por seguridad. Se preserva todo el historial.');
-    setTimeout(() => setScanFeedback(null), 3500);
+      await setDoc(doc(db, 'equipments', equipmentId), updated);
+      await setDoc(doc(db, 'audit_logs', log.id), log);
+      setScanFeedback('Guardado: Etiqueta desactivada por seguridad. Se preserva todo el historial en Firestore.');
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.UPDATE, `equipments/${equipmentId}`);
+      setScanFeedback(`Error al desactivar etiqueta en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Add Maintenance Report (Only Ingeniero)
-  const addMaintenance = (
+  // Add Maintenance Report (Only Ingeniero) - Persisted to Firestore
+  const addMaintenance = async (
     record: Omit<MaintenanceRecord, 'id' | 'consecutivo' | 'numeroReporte'>
-  ): string => {
+  ): Promise<string> => {
     if (!isIngeniero && users.length > 0) {
-      alert('Solo los ingenieros biomédicos están autorizados para radicar reportes de servicio técnico.');
-      return '';
+      throw new Error('Solo los ingenieros biomédicos están autorizados para radicar reportes de servicio técnico.');
     }
 
     const inst = institutions.find((i) => i.id === record.institutionId);
     const consecutivo = inst ? inst.nextConsecutive : 1;
     const formattedNum = `No. ${String(consecutivo).padStart(4, '0')}`;
-
-    // Increment institution consecutive
-    setInstitutions((prev) =>
-      prev.map((i) =>
-        i.id === record.institutionId ? { ...i, nextConsecutive: i.nextConsecutive + 1 } : i
-      )
-    );
 
     const id = `maint-${Date.now()}`;
     const newRecord: MaintenanceRecord = {
@@ -726,15 +891,12 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       id,
       consecutivo,
       numeroReporte: formattedNum,
-      // Name, RH and role strictly bound to the authenticated engineer
       trabajoRealizadoPor: currentUserProfile?.fullName || record.trabajoRealizadoPor,
       rh: currentUserProfile?.rh || record.rh,
       cargo: currentUserProfile?.cargo || record.cargo,
       createdBy: currentUserProfile?.id,
       createdAt: new Date().toISOString(),
     };
-
-    setMaintenances((prev) => [newRecord, ...prev]);
 
     const log: AuditLog = {
       id: `audit-${Date.now()}`,
@@ -747,22 +909,30 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       changedByRh: currentUserProfile?.rh || 'TP N/A',
       summary: `Reporte de servicio técnico ${formattedNum} radicado. Próximo mant.: ${record.proximaFechaCalculada}.`,
     };
-    setAuditLogs((prev) => [log, ...prev]);
 
     try {
-      setDoc(doc(db, 'maintenances', id), newRecord).catch((err) =>
-        handleFirestoreError(err, OperationType.CREATE, `maintenances/${id}`)
-      );
-      setDoc(doc(db, 'audit_logs', log.id), log).catch(() => {});
-    } catch {}
+      await setDoc(doc(db, 'maintenances', id), newRecord);
+      await setDoc(doc(db, 'audit_logs', log.id), log);
 
-    setScanFeedback(`Reporte ${formattedNum} guardado con éxito. Próximo mantenimiento reprogramado.`);
-    setTimeout(() => setScanFeedback(null), 4000);
-    return id;
+      // Increment institution consecutive in Firestore
+      if (inst) {
+        await updateDoc(doc(db, 'institutions', record.institutionId), {
+          nextConsecutive: consecutivo + 1,
+        });
+      }
+
+      setScanFeedback(`Guardado: Reporte ${formattedNum} registrado con éxito en Firestore.`);
+      setTimeout(() => setScanFeedback(null), 4000);
+      return id;
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.CREATE, `maintenances/${id}`);
+      setScanFeedback(`Error al guardar reporte en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Add Incident (Nursing / Clinical staff)
-  const addIncident = (incident: Omit<IncidentReport, 'id' | 'createdAt'>) => {
+  // Add Incident (Nursing / Clinical staff) - Persisted to Firestore
+  const addIncident = async (incident: Omit<IncidentReport, 'id' | 'createdAt'>): Promise<void> => {
     const id = `inc-${Date.now()}`;
     const newInc: IncidentReport = {
       ...incident,
@@ -770,88 +940,127 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       createdAt: new Date().toISOString(),
     };
 
-    setIncidents((prev) => [newInc, ...prev]);
-
     try {
-      setDoc(doc(db, 'incidents', id), newInc).catch(() => {});
-    } catch {}
-
-    setScanFeedback('Reporte de falla remitido a Ingeniería Biomédica.');
-    setTimeout(() => setScanFeedback(null), 4000);
+      await setDoc(doc(db, 'incidents', id), newInc);
+      setScanFeedback('Guardado: Reporte de falla remitido a Ingeniería Biomédica en Firestore.');
+      setTimeout(() => setScanFeedback(null), 4000);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.CREATE, `incidents/${id}`);
+      setScanFeedback(`Error al radicar falla en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // Hospital & Company Admin Actions
-  const createHospitalUser = (userData: Omit<UserProfile, 'id' | 'createdAt'>) => {
-    const newId = `user-${Date.now()}`;
-    const newUser: UserProfile = {
-      ...userData,
-      id: newId,
-      createdAt: new Date().toISOString().slice(0, 10),
-    };
-
-    setUsers((prev) => [...prev, newUser]);
-
-    try {
-      setDoc(doc(db, 'users', newId), newUser).catch((err) =>
-        handleFirestoreError(err, OperationType.CREATE, `users/${newId}`)
-      );
-    } catch {}
-
-    setScanFeedback(`Usuario ${newUser.fullName} (${newUser.role}) creado.`);
-    setTimeout(() => setScanFeedback(null), 3500);
-  };
-
-  const toggleUserActive = (userId: string) => {
+  // Hospital & Company Admin Action: Create new user via secondary Firebase App instance
+  // User receives email invitation to set their own password. Admin never sees password.
+  const createHospitalUser = async (userData: Omit<UserProfile, 'id' | 'createdAt'>): Promise<void> => {
     if (!isAdminHospital && users.length > 0) {
-      alert('Solo el Administrador del Hospital puede modificar el estado de las cuentas.');
-      return;
+      throw new Error('Solo el Administrador del Hospital puede registrar nuevos usuarios.');
     }
 
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, active: !u.active } : u))
-    );
-    setScanFeedback('Estado de cuenta actualizado.');
-    setTimeout(() => setScanFeedback(null), 3000);
+    try {
+      setScanFeedback('Creando usuario seguro en Firebase Auth...');
+      const uid = await createSecondaryUser(userData.email);
+
+      const newUser: UserProfile = {
+        id: uid,
+        email: userData.email.trim().toLowerCase(),
+        fullName: userData.fullName.trim(),
+        role: userData.role,
+        institutionId: userData.institutionId,
+        cargo: userData.cargo.trim(),
+        rh: userData.rh ? userData.rh.trim() : undefined,
+        active: true,
+        createdAt: new Date().toISOString().slice(0, 10),
+      };
+
+      await setDoc(doc(db, 'users', uid), newUser);
+      setScanFeedback(`Guardado: Usuario ${newUser.fullName} creado. Se envió correo a ${newUser.email} para que configure su contraseña.`);
+      setTimeout(() => setScanFeedback(null), 4500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.CREATE, 'users');
+      setScanFeedback(`Error al crear usuario: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  const createInstitution = (instData: Omit<Institution, 'id'>): string => {
+  // Toggle user activation. Deactivated users are instantly disconnected
+  const toggleUserActive = async (userId: string): Promise<void> => {
+    if (!isAdminHospital && users.length > 0) {
+      throw new Error('Solo el Administrador del Hospital puede modificar el estado de las cuentas.');
+    }
+
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return;
+
+    if (targetUser.id === currentUserProfile?.id) {
+      throw new Error('No puedes desactivar tu propia cuenta administradora.');
+    }
+
+    try {
+      const newActive = !targetUser.active;
+      await updateDoc(doc(db, 'users', userId), {
+        active: newActive,
+      });
+      setScanFeedback(`Guardado: Cuenta de ${targetUser.fullName} ${newActive ? 'activada' : 'desactivada'}.`);
+      setTimeout(() => setScanFeedback(null), 3500);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
+      setScanFeedback(`Error al actualizar estado en Firestore: ${errInfo.error}`);
+      throw err;
+    }
+  };
+
+  const createInstitution = async (instData: Omit<Institution, 'id'>): Promise<string> => {
     const newId = `inst-${Date.now()}`;
     const newInst: Institution = {
       ...instData,
       id: newId,
     };
-    setInstitutions((prev) => [...prev, newInst]);
-    return newId;
+
+    try {
+      await setDoc(doc(db, 'institutions', newId), newInst);
+      setScanFeedback(`Guardado: Hospital ${newInst.name} registrado en Firestore.`);
+      setTimeout(() => setScanFeedback(null), 3000);
+      return newId;
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.CREATE, `institutions/${newId}`);
+      setScanFeedback(`Error al crear hospital en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  const updateHospitalSettings = (
+  const updateHospitalSettings = async (
     institutionId: string,
     settings: { requireLoginForScan?: boolean }
-  ) => {
-    setInstitutions((prev) =>
-      prev.map((i) => (i.id === institutionId ? { ...i, ...settings } : i))
-    );
-    setScanFeedback('Configuración del hospital actualizada.');
-    setTimeout(() => setScanFeedback(null), 3000);
+  ): Promise<void> => {
+    try {
+      await updateDoc(doc(db, 'institutions', institutionId), settings);
+      setScanFeedback('Guardado: Configuración del hospital actualizada en Firestore.');
+      setTimeout(() => setScanFeedback(null), 3000);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.UPDATE, `institutions/${institutionId}`);
+      setScanFeedback(`Error al actualizar configuración en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
-  // 3-Step Onboarding Setup Completion
-  const completeOnboardingSetup = (
+  // First-time registration of the buyer company and its master administrator
+  const completeCompanyAndAdminRegistration = async (
     companyData: Partial<CompanyProfile>,
     instData: { name: string; city: string; department: string; address: string; phone: string; nextConsecutive: number },
-    engineerData: { fullName: string; email: string; cargo: string; rh: string; pass: string }
-  ) => {
+    adminData: { fullName: string; email: string; pass: string; cargo?: string; rh?: string }
+  ): Promise<void> => {
     // 1. Company
     const newCompany: CompanyProfile = {
       ...INITIAL_COMPANY_PROFILE,
       ...companyData,
-      id: 'company-main',
+      id: 'main',
       colorPrincipal: companyData.colorPrincipal || '#0f2942',
       updatedAt: new Date().toISOString(),
     };
-    setCompanyProfile(newCompany);
 
-    // 2. Institution
+    // 2. Primary Institution
     const newInstId = `inst-${Date.now()}`;
     const newInst: Institution = {
       id: newInstId,
@@ -863,48 +1072,46 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       requireLoginForScan: false,
       nextConsecutive: instData.nextConsecutive || 1,
     };
-    setInstitutions([newInst]);
 
-    // 3. Engineer User
-    const engId = `user-eng-${Date.now()}`;
-    const engUser: UserProfile = {
-      id: engId,
-      fullName: engineerData.fullName.trim(),
-      email: engineerData.email.trim(),
-      cargo: engineerData.cargo.trim() || 'Ingeniero Biomédico',
-      rh: engineerData.rh.trim(),
-      role: 'ingeniero',
-      institutionId: newInstId,
-      active: true,
-      createdAt: new Date().toISOString().slice(0, 10),
-    };
+    // 3. Create Real Firebase Auth Account for Master Administrator
+    const userCred = await createUserWithEmailAndPassword(
+      auth,
+      adminData.email.trim().toLowerCase(),
+      adminData.pass
+    );
+    const authUid = userCred.user.uid;
 
-    // Also auto-create hospital admin account
     const adminUser: UserProfile = {
-      id: `user-admin-${Date.now()}`,
-      fullName: `Admin ${instData.name}`,
-      email: `admin@${engineerData.email.split('@')[1] || 'hospital.com'}`,
-      cargo: 'Administrador Hospitalario',
+      id: authUid,
+      fullName: adminData.fullName.trim(),
+      email: adminData.email.trim().toLowerCase(),
+      cargo: adminData.cargo?.trim() || 'Director / Administrador Hospitalario',
+      rh: adminData.rh?.trim() || undefined,
       role: 'admin_hospital',
       institutionId: newInstId,
       active: true,
       createdAt: new Date().toISOString().slice(0, 10),
     };
 
-    setUsers([engUser, adminUser]);
-    setCurrentUserProfile(engUser);
-    setIsSetupWizardOpen(false);
-    setActiveTab('inicio');
-
     try {
-      setDoc(doc(db, 'company_profile', 'main'), newCompany).catch(() => {});
-      setDoc(doc(db, 'institutions', newInstId), newInst).catch(() => {});
-      setDoc(doc(db, 'users', engId), engUser).catch(() => {});
-      setDoc(doc(db, 'users', adminUser.id), adminUser).catch(() => {});
-    } catch {}
+      // Persist to Firestore
+      await setDoc(doc(db, 'companies', 'main'), newCompany);
+      await setDoc(doc(db, 'company_profile', 'main'), newCompany).catch(() => {});
+      await setDoc(doc(db, 'institutions', newInstId), newInst);
+      await setDoc(doc(db, 'users', adminUser.id), adminUser);
 
-    setScanFeedback(`¡Configuración inicial completada! Bienvenido a BIO-TAG.`);
-    setTimeout(() => setScanFeedback(null), 5000);
+      setCompanyProfile(newCompany);
+      setCurrentUserProfile(adminUser);
+      setIsSetupWizardOpen(false);
+      setActiveTab('inicio');
+
+      setScanFeedback('¡Cuenta de empresa y administrador creados exitosamente en Firestore!');
+      setTimeout(() => setScanFeedback(null), 5000);
+    } catch (err) {
+      const errInfo = handleFirestoreError(err, OperationType.WRITE, 'company_registration');
+      setScanFeedback(`Error al guardar en Firestore: ${errInfo.error}`);
+      throw err;
+    }
   };
 
   // Alerts & Notifications
@@ -935,7 +1142,6 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const triggerOverdueEmailAlert = (equipmentId: string) => {
     const eq = equipments.find((e) => e.id === equipmentId);
     if (!eq) return;
-    const inst = institutions.find((i) => i.id === eq.institutionId);
     const latest = getLatestMaintenance(eq.id);
 
     const newNotification: EmailNotification = {
@@ -964,8 +1170,6 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setIncidents(INITIAL_INCIDENTS);
     setCurrentUserProfile(null);
     setActiveEquipmentId('');
-    localStorage.clear();
-    localStorage.setItem(STORAGE_KEY_VERSION, 'true');
     setIsSetupWizardOpen(true);
     setActiveTab('inicio');
     setScanFeedback('Sistema restablecido. Asistente de configuración abierto.');
@@ -975,6 +1179,14 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   return (
     <BiomedicalContext.Provider
       value={{
+        isAuthLoading,
+        isInitialDataLoaded,
+        hasAnyAdmin,
+        sessionExpiredMessage,
+        setSessionExpiredMessage,
+        failedLoginAttempts,
+        isLockedOut,
+        lockoutRemainingSeconds,
         companyProfile,
         updateCompanyProfile,
         fbUser,
@@ -987,8 +1199,9 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         isConsulta,
         loginError,
         loginWithEmail,
-        quickLoginAs,
         logout,
+        sendUserPasswordReset,
+        changePassword,
         institutions,
         equipments,
         maintenances,
@@ -1005,7 +1218,7 @@ export const BiomedicalProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         globalSearchQuery,
         isSetupWizardOpen,
         setIsSetupWizardOpen,
-        completeOnboardingSetup,
+        completeCompanyAndAdminRegistration,
         isDirectScanMode,
         scannedToken,
         scannedEquipment,

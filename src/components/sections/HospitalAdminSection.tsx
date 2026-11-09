@@ -25,6 +25,7 @@ export const HospitalAdminSection: React.FC = () => {
     isAdminHospital,
     createHospitalUser,
     toggleUserActive,
+    sendUserPasswordReset,
     updateHospitalSettings,
     auditLogs,
   } = useBiomedical();
@@ -36,32 +37,40 @@ export const HospitalAdminSection: React.FC = () => {
   const [role, setRole] = useState<UserRole>('ingeniero');
   const [cargo, setCargo] = useState('Ingeniero Biomédico de Planta');
   const [rh, setRh] = useState('TP ');
-  const [password, setPassword] = useState('Hospital2026!');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [resetSentEmail, setResetSentEmail] = useState<string | null>(null);
 
   const activeHospitalId = currentUserProfile?.institutionId;
   const hospital = institutions.find((i) => i.id === activeHospitalId);
   const hospitalUsers = users.filter((u) => u.institutionId === activeHospitalId);
   const hospitalAudit = auditLogs.filter((a) => a.institutionId === activeHospitalId);
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !email.trim() || !activeHospitalId) return;
 
-    createHospitalUser({
-      fullName: fullName.trim(),
-      email: email.trim().toLowerCase(),
-      role,
-      institutionId: activeHospitalId,
-      cargo: cargo.trim() || 'Personal Hospitalario',
-      rh: role === 'ingeniero' ? rh.trim() : undefined,
-      active: true,
-    });
+    setIsSubmitting(true);
+    try {
+      await createHospitalUser({
+        fullName: fullName.trim(),
+        email: email.trim().toLowerCase(),
+        role,
+        institutionId: activeHospitalId,
+        cargo: cargo.trim() || 'Personal Hospitalario',
+        rh: role === 'ingeniero' ? rh.trim() : undefined,
+        active: true,
+      });
 
-    setFullName('');
-    setEmail('');
-    setCargo('Ingeniero Biomédico de Planta');
-    setRh('TP ');
-    setShowCreateForm(false);
+      setFullName('');
+      setEmail('');
+      setCargo('Ingeniero Biomédico de Planta');
+      setRh('TP ');
+      setShowCreateForm(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleToggleRequireLogin = () => {
@@ -228,17 +237,16 @@ export const HospitalAdminSection: React.FC = () => {
               </div>
             )}
 
-            <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                Contraseña Inicial:
-              </label>
-              <input
-                type="text"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
-                required
-              />
+            <div className="sm:col-span-2 p-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl flex items-start gap-3">
+              <Mail className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />
+              <div className="text-xs">
+                <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                  Invitación y Contraseña Segura
+                </span>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  El sistema generará la cuenta en Firebase Authentication y enviará automáticamente un correo a <strong>{email || 'la dirección del usuario'}</strong> con el enlace oficial para que configure su propia contraseña personal y privada. Ningún administrador conoce la contraseña de otro usuario.
+                </p>
+              </div>
             </div>
 
             <div className="sm:col-span-2 flex justify-end gap-2 pt-2 border-t">
@@ -251,12 +259,29 @@ export const HospitalAdminSection: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold shadow-xs"
+                disabled={isSubmitting}
+                className="px-4 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white font-bold shadow-xs flex items-center gap-1.5"
               >
-                Crear y Habilitar Cuenta
+                {isSubmitting ? 'Creando...' : 'Crear y Enviar Invitación'}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Reset password notification feedback */}
+      {resetSentEmail && (
+        <div className="p-3 bg-teal-50 dark:bg-teal-950/60 border border-teal-300 dark:border-teal-800 rounded-xl text-teal-900 dark:text-teal-200 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-teal-600 shrink-0" />
+            <span>Se ha despachado el enlace de restablecimiento de contraseña a <strong>{resetSentEmail}</strong>.</span>
+          </div>
+          <button
+            onClick={() => setResetSentEmail(null)}
+            className="text-teal-700 dark:text-teal-300 text-xs font-bold px-2 py-0.5"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -281,7 +306,7 @@ export const HospitalAdminSection: React.FC = () => {
                 <th className="py-2.5 px-4">Rol</th>
                 <th className="py-2.5 px-4">RH (Tarjeta Profesional)</th>
                 <th className="py-2.5 px-4">Estado</th>
-                <th className="py-2.5 px-4 text-right">Acción</th>
+                <th className="py-2.5 px-4 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -326,16 +351,32 @@ export const HospitalAdminSection: React.FC = () => {
                     )}
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <button
-                      onClick={() => toggleUserActive(u.id)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
-                        u.active
-                          ? 'bg-red-50 hover:bg-red-100 text-red-700 dark:bg-red-950 dark:hover:bg-red-900 dark:text-red-300'
-                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                      }`}
-                    >
-                      {u.active ? 'Desactivar' : 'Reactivar'}
-                    </button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={async () => {
+                          try {
+                            await sendUserPasswordReset(u.email);
+                            setResetSentEmail(u.email);
+                          } catch {
+                            // Handled in context
+                          }
+                        }}
+                        title="Enviar correo de restablecimiento de contraseña"
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+                      >
+                        Restablecer clave
+                      </button>
+                      <button
+                        onClick={() => toggleUserActive(u.id)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                          u.active
+                            ? 'bg-red-50 hover:bg-red-100 text-red-700 dark:bg-red-950 dark:hover:bg-red-900 dark:text-red-300'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                        }`}
+                      >
+                        {u.active ? 'Desactivar' : 'Reactivar'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

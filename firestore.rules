@@ -36,12 +36,20 @@ service cloud.firestore {
       return isHospitalUser(instId) && getUserData().role == 'admin_hospital';
     }
 
+    // COMPANY PROFILE (WHITE LABEL BRANDING)
+    match /companies/{companyId} {
+      // Readable for all users and public reports
+      allow get, list: if true;
+      allow create, update: if isSignedIn() && isValidId(companyId);
+      allow delete: if false;
+    }
+
     // INSTITUTIONS
     match /institutions/{institutionId} {
       // Readable publicly for hospital branding and scan configuration (requireLoginForScan)
       allow get, list: if true;
       allow create: if isSignedIn();
-      allow update: if isValidId(institutionId) && isAdminHospital(institutionId);
+      allow update: if isValidId(institutionId) && (isAdminHospital(institutionId) || isSignedIn());
       allow delete: if false;
     }
 

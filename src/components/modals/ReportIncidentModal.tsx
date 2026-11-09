@@ -6,6 +6,7 @@ import {
   Send,
   Building,
   CheckCircle,
+  Loader2,
 } from 'lucide-react';
 
 interface ReportIncidentModalProps {
@@ -31,30 +32,39 @@ export const ReportIncidentModal: React.FC<ReportIncidentModalProps> = ({
   const [cargo, setCargo] = useState('Enfermería Clínica');
   const [prioridad, setPrioridad] = useState<'baja' | 'media' | 'alta' | 'critica'>('alta');
   const [descripcion, setDescripcion] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
   const currentEq = equipments.find((e) => e.id === equipmentId) || selectedEquipment;
   const inst = institutions.find((i) => i.id === currentEq?.institutionId);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!descripcion.trim() || !currentEq) return;
 
-    addIncident({
-      equipmentId: currentEq.id,
-      institutionId: currentEq.institutionId,
-      fecha: new Date().toISOString().slice(0, 10),
-      reportadoPor: reportadoPor.trim() || 'Personal Clínico',
-      cargo: cargo.trim() || 'Enfermería',
-      prioridad,
-      descripcion: descripcion.trim(),
-      estado: 'pendiente',
-    });
+    setSaveError(null);
+    setIsSubmitting(true);
 
-    setScanFeedback(`Reporte de falla enviado para ${currentEq.nombre}. Ingeniería Biomédica notificada.`);
-    setTimeout(() => setScanFeedback(null), 4000);
-    onClose();
+    try {
+      await addIncident({
+        equipmentId: currentEq.id,
+        institutionId: currentEq.institutionId,
+        fecha: new Date().toISOString().slice(0, 10),
+        reportadoPor: reportadoPor.trim() || 'Personal Clínico',
+        cargo: cargo.trim() || 'Enfermería',
+        prioridad,
+        descripcion: descripcion.trim(),
+        estado: 'pendiente',
+      });
+
+      onClose();
+    } catch (err: any) {
+      setSaveError(err instanceof Error ? err.message : 'Error al guardar la falla en Firestore.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -171,21 +181,34 @@ export const ReportIncidentModal: React.FC<ReportIncidentModalProps> = ({
             />
           </div>
 
+          {saveError && (
+            <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+              <span className="font-bold">Error:</span>
+              <span>{saveError}</span>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
             <button
               type="button"
               onClick={onClose}
+              disabled={isSubmitting}
               className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-semibold flex items-center gap-1.5 transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-semibold flex items-center gap-1.5 transition-colors"
             >
-              <Send className="w-4 h-4" />
-              <span>Enviar a Ingeniería</span>
+              {isSubmitting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              <span>{isSubmitting ? 'Guardando en Firestore...' : 'Enviar a Ingeniería'}</span>
             </button>
           </div>
         </form>

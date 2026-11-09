@@ -15,8 +15,10 @@ import {
   Phone,
   AlertCircle,
   FileText,
+  Loader2,
 } from 'lucide-react';
 import { HospitalAdminSection } from './HospitalAdminSection';
+import { uploadFileToStorage } from '../../firebase';
 
 export const CompanySettingsSection: React.FC = () => {
   const {
@@ -41,35 +43,49 @@ export const CompanySettingsSection: React.FC = () => {
   const [telefonos, setTelefonos] = useState(companyProfile.telefonos);
   const [colorPrincipal, setColorPrincipal] = useState(companyProfile.colorPrincipal || '#0f2942');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setLogoUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+      setIsUploadingLogo(true);
+      try {
+        const downloadUrl = await uploadFileToStorage(file, 'company_logos');
+        setLogoUrl(downloadUrl);
+      } catch (err) {
+        console.error('Error subiendo logo a Firebase Storage:', err);
+      } finally {
+        setIsUploadingLogo(false);
+      }
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateCompanyProfile({
-      nombre: nombre.trim(),
-      nit: nit.trim(),
-      eslogan: eslogan.trim(),
-      logoUrl,
-      direccion: direccion.trim(),
-      ciudad: ciudad.trim(),
-      correo: correo.trim(),
-      telefonos: telefonos.trim(),
-      colorPrincipal,
-    });
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setSaveError(null);
+    setIsSaving(true);
+    try {
+      await updateCompanyProfile({
+        nombre: nombre.trim(),
+        nit: nit.trim(),
+        eslogan: eslogan.trim(),
+        logoUrl,
+        direccion: direccion.trim(),
+        ciudad: ciudad.trim(),
+        correo: correo.trim(),
+        telefonos: telefonos.trim(),
+        colorPrincipal,
+      });
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      setSaveError(err instanceof Error ? err.message : 'Error al guardar datos de la empresa en Firestore.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getCompanyInitials = (nameStr: string) => {
@@ -212,14 +228,23 @@ export const CompanySettingsSection: React.FC = () => {
                     </div>
                     <div className="flex-1">
                       <label className="flex items-center justify-center gap-2 py-2 px-3 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer text-slate-600 dark:text-slate-400 transition-colors">
-                        <Upload className="w-4 h-4 text-slate-400" />
+                        {isUploadingLogo ? (
+                          <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
+                        ) : (
+                          <Upload className="w-4 h-4 text-slate-400" />
+                        )}
                         <span className="truncate">
-                          {logoUrl ? 'Cambiar logo' : 'Subir logo'}
+                          {isUploadingLogo
+                            ? 'Guardando en Firebase Storage...'
+                            : logoUrl
+                            ? 'Cambiar logo'
+                            : 'Subir logo'}
                         </span>
                         <input
                           type="file"
                           accept="image/png, image/jpeg, image/svg+xml"
                           onChange={handleLogoUpload}
+                          disabled={isUploadingLogo}
                           className="hidden"
                         />
                       </label>
@@ -321,16 +346,30 @@ export const CompanySettingsSection: React.FC = () => {
                 </div>
               </div>
 
+              {saveError && (
+                <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+                  <span className="font-bold">Error:</span>
+                  <span>{saveError}</span>
+                </div>
+              )}
+
               <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
                 <span className="text-[11px] text-slate-400">
-                  {savedSuccess ? '¡Cambios guardados con éxito!' : 'Guarda para actualizar tus encabezados.'}
+                  {savedSuccess
+                    ? '¡Guardado exitosamente en Firestore!'
+                    : 'Guarda para actualizar tus encabezados en todos los dispositivos.'}
                 </span>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold flex items-center gap-2 transition-colors shadow-xs"
+                  disabled={isSaving || isUploadingLogo}
+                  className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold flex items-center gap-2 transition-colors shadow-xs text-xs"
                 >
-                  <Save className="w-4 h-4" />
-                  <span>Guardar Datos de la Empresa</span>
+                  {isSaving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  <span>{isSaving ? 'Guardando en Firestore...' : 'Guardar Datos de la Empresa'}</span>
                 </button>
               </div>
             </form>

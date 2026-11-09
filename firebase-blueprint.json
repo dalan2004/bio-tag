@@ -1,5 +1,24 @@
 {
   "entities": {
+    "CompanyProfile": {
+      "title": "CompanyProfile",
+      "description": "White-label biomedical service company profile and visual branding",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "nombre": { "type": "string", "maxLength": 200 },
+        "nit": { "type": "string", "maxLength": 60 },
+        "eslogan": { "type": "string", "maxLength": 200 },
+        "logoUrl": { "type": "string", "maxLength": 500000 },
+        "direccion": { "type": "string", "maxLength": 200 },
+        "ciudad": { "type": "string", "maxLength": 100 },
+        "correo": { "type": "string", "maxLength": 150 },
+        "telefonos": { "type": "string", "maxLength": 80 },
+        "colorPrincipal": { "type": "string", "maxLength": 30 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "nombre", "nit"]
+    },
     "Institution": {
       "title": "Institution",
       "description": "Hospital or clinic institution in the biomedical management network",
@@ -153,6 +172,10 @@
     }
   },
   "firestore": {
+    "/companies/{companyId}": {
+      "schema": { "$ref": "#/entities/CompanyProfile" },
+      "description": "White-label biomedical service company brand, NIT and contact configurations"
+    },
     "/institutions/{institutionId}": {
       "schema": { "$ref": "#/entities/Institution" },
       "description": "Hospital or clinic institutions"
