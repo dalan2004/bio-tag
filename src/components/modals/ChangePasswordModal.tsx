@@ -51,7 +51,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     }
 
     if (!strength.isValid) {
-      setError('La nueva contraseña debe tener al menos 8 caracteres e incluir letras y números.');
+      setError('La nueva contraseña debe tener 12 caracteres e incluir mayúscula, minúscula, número y símbolo.');
       return;
     }
 
@@ -162,7 +162,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 type={showNew ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Mínimo 8 caracteres (letras y números)"
+                placeholder="Mínimo 12 caracteres, mayúscula, minúscula, número y símbolo"
                 className="w-full pl-9 pr-10 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
                 required
               />
@@ -202,7 +202,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                     {strength.message}
                   </span>
                   <span className="text-slate-400 font-mono">
-                    {newPassword.length}/8 caracteres
+                    {newPassword.length}/12 caracteres
                   </span>
                 </div>
               </div>

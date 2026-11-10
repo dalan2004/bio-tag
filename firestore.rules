@@ -1,131 +1,158 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Default deny catch-all
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Helper functions
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function profilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
     }
 
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    function hasProfile() {
+      return signedIn() && exists(profilePath());
     }
 
-    function userExists() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    function profile() {
+      return get(profilePath()).data;
     }
 
-    function isHospitalUser(instId) {
-      return userExists() && getUserData().active == true && getUserData().institutionId == instId;
+    function isActive() {
+      return hasProfile() && profile().active == true;
     }
 
-    function isIngeniero(instId) {
-      return isHospitalUser(instId) && getUserData().role == 'ingeniero';
+    function belongsTo(institutionId) {
+      return isActive() && profile().institutionId == institutionId;
     }
 
-    function isAdminHospital(instId) {
-      return isHospitalUser(instId) && getUserData().role == 'admin_hospital';
+    function hasRole(role) {
+      return isActive() && profile().role == role;
     }
 
-    // COMPANY PROFILE (WHITE LABEL BRANDING)
+    function isAdmin(institutionId) {
+      return belongsTo(institutionId) && hasRole('admin_hospital');
+    }
+
+    function isEngineerOrAdmin(institutionId) {
+      return belongsTo(institutionId) &&
+        (profile().role == 'ingeniero' || profile().role == 'admin_hospital');
+    }
+
+    function validId(value) {
+      return value is string &&
+        value.size() > 0 &&
+        value.size() <= 128 &&
+        value.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function validRole(value) {
+      return value in ['ingeniero', 'admin_hospital', 'enfermeria', 'consulta'];
+    }
+
+    function validUser(data, userId) {
+      return data.keys().hasOnly([
+          'id', 'email', 'fullName', 'role', 'institutionId', 'rh',
+          'cargo', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == userId &&
+        data.email is string && data.email.size() <= 254 &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 150 &&
+        validRole(data.role) &&
+        validId(data.institutionId) &&
+        data.cargo is string && data.cargo.size() <= 100 &&
+        data.active is bool;
+    }
+
+    function validInstitution(data, institutionId) {
+      return data.keys().hasOnly([
+          'id', 'name', 'city', 'department', 'address', 'phone',
+          'requireLoginForScan', 'nextConsecutive', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == institutionId &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 200 &&
+        data.city is string && data.city.size() <= 100 &&
+        data.department is string && data.department.size() <= 100 &&
+        data.address is string && data.address.size() <= 200 &&
+        data.phone is string && data.phone.size() <= 50 &&
+        data.requireLoginForScan is bool &&
+        data.nextConsecutive is int && data.nextConsecutive >= 1;
+    }
+
+    match /system/{documentId} {
+      allow read, write: if false;
+    }
+
     match /companies/{companyId} {
-      // Readable for all users and public reports
-      allow get, list: if true;
-      allow create, update: if isSignedIn() && isValidId(companyId);
+      allow get: if companyId == 'main';
+      allow list: if false;
+      allow create: if false;
+      allow update: if companyId == 'main' &&
+        isActive() && profile().role == 'admin_hospital' &&
+        request.resource.data.id == 'main' &&
+        request.resource.data.keys().hasOnly([
+          'id', 'nombre', 'nit', 'eslogan', 'logoUrl', 'direccion',
+          'ciudad', 'correo', 'telefonos', 'colorPrincipal', 'updatedAt'
+        ]) &&
+        request.resource.data.nombre is string && request.resource.data.nombre.size() <= 200 &&
+        request.resource.data.nit is string && request.resource.data.nit.size() <= 60 &&
+        request.resource.data.logoUrl is string && request.resource.data.logoUrl.size() <= 2048;
       allow delete: if false;
     }
 
-    // INSTITUTIONS
     match /institutions/{institutionId} {
-      // Readable publicly for hospital branding and scan configuration (requireLoginForScan)
-      allow get, list: if true;
-      allow create: if isSignedIn();
-      allow update: if isValidId(institutionId) && (isAdminHospital(institutionId) || isSignedIn());
+      allow get: if belongsTo(institutionId);
+      allow list: if false;
+      allow create: if isActive() && profile().role == 'admin_hospital' &&
+        validInstitution(request.resource.data, institutionId);
+      allow update: if isAdmin(institutionId) &&
+        validInstitution(request.resource.data, institutionId) &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.nextConsecutive == resource.data.nextConsecutive;
       allow delete: if false;
     }
 
-    // USER PROFILES
     match /users/{userId} {
-      allow get: if isSignedIn() && (
+      allow get: if isActive() && (
         request.auth.uid == userId ||
-        (userExists() && getUserData().institutionId == resource.data.institutionId)
+        profile().institutionId == resource.data.institutionId
       );
-      allow list: if isSignedIn() && userExists();
-      // Only hospital admin can create and update users for their own hospital
-      allow create: if isSignedIn() && (
-        request.auth.uid == userId ||
-        isAdminHospital(request.resource.data.institutionId)
-      );
-      allow update: if isSignedIn() && isValidId(userId) && (
-        (request.auth.uid == userId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fullName', 'cargo'])) ||
-        (isAdminHospital(resource.data.institutionId) && request.resource.data.institutionId == resource.data.institutionId)
-      );
-      allow delete: if false;
+      allow list: if isActive() &&
+        profile().role == 'admin_hospital' &&
+        resource.data.institutionId == profile().institutionId;
+      allow create, delete: if false;
+      allow update: if isActive() &&
+        request.auth.uid == userId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fullName', 'cargo', 'updatedAt']) &&
+        validUser(request.resource.data, userId);
     }
 
-    // BIOMEDICAL EQUIPMENT
     match /equipments/{equipmentId} {
-      // Unauthenticated public mobile read is allowed if tag is active,
-      // or authenticated members of the hospital can read all equipments
-      allow get: if (resource.data.tagActive == true) ||
-        (isSignedIn() && isHospitalUser(resource.data.institutionId));
-      allow list: if true;
-
-      // Only engineer of the hospital can create equipment
-      allow create: if isValidId(equipmentId) &&
-        isIngeniero(request.resource.data.institutionId) &&
-        request.resource.data.tagToken is string &&
-        request.resource.data.tagToken.size() >= 16;
-
-      // Only engineer of the hospital can update equipment (including tag token regeneration and life sheet updates)
-      allow update: if isValidId(equipmentId) &&
-        isIngeniero(resource.data.institutionId) &&
-        request.resource.data.institutionId == resource.data.institutionId;
-
-      // Preserving full equipment life sheets and traceability history
-      allow delete: if false;
+      allow get: if belongsTo(resource.data.institutionId);
+      allow list: if belongsTo(resource.data.institutionId);
+      allow create, update, delete: if false;
     }
 
-    // MAINTENANCE SERVICE REPORTS (MMC S.A.S. FORMAT)
     match /maintenances/{maintenanceId} {
-      // Readable for inspection upon scan or by hospital users
-      allow get, list: if true;
-
-      // Only engineer of that hospital can file a maintenance report, and their RH must match their profile
-      allow create: if isValidId(maintenanceId) &&
-        isIngeniero(request.resource.data.institutionId) &&
-        request.resource.data.rh == getUserData().rh;
-
-      // Maintenance reports are official audit records and cannot be altered or deleted once signed
-      allow update, delete: if false;
+      allow get: if belongsTo(resource.data.institutionId);
+      allow list: if belongsTo(resource.data.institutionId);
+      allow create, update, delete: if false;
     }
 
-    // INCIDENT & FAILURE REPORTS
     match /incidents/{incidentId} {
-      allow get, list: if isSignedIn() && isHospitalUser(resource.data.institutionId);
-      // Nursing and all hospital users can report failures
-      allow create: if isValidId(incidentId) && isHospitalUser(request.resource.data.institutionId);
-      // Engineers or admins can update incident status (e.g. en_revision, resuelto)
-      allow update: if isValidId(incidentId) &&
-        (isIngeniero(resource.data.institutionId) || isAdminHospital(resource.data.institutionId));
-      allow delete: if false;
+      allow get: if belongsTo(resource.data.institutionId);
+      allow list: if belongsTo(resource.data.institutionId);
+      allow create, update, delete: if false;
     }
 
-    // AUDIT LOGS (IMMUTABLE LOGS)
     match /audit_logs/{auditId} {
-      allow get, list: if isSignedIn() &&
-        (isIngeniero(resource.data.institutionId) || isAdminHospital(resource.data.institutionId));
-      allow create: if isValidId(auditId) && isIngeniero(request.resource.data.institutionId);
-      allow update, delete: if false;
+      allow get: if isEngineerOrAdmin(resource.data.institutionId);
+      allow list: if isEngineerOrAdmin(resource.data.institutionId);
+      allow create, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

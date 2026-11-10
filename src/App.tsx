@@ -27,6 +27,7 @@ const MainAppContent: React.FC = () => {
   const {
     isAuthLoading,
     isAuthenticated,
+    isAdminHospital,
     activeTab,
     selectedEquipment,
     institutions,
@@ -35,6 +36,8 @@ const MainAppContent: React.FC = () => {
     scanFeedback,
     setScanFeedback,
     isDirectScanMode,
+    isPublicScanLoading,
+    requiresLoginToScan,
     isSetupWizardOpen,
     setIsSetupWizardOpen,
   } = useBiomedical();
@@ -89,17 +92,29 @@ const MainAppContent: React.FC = () => {
     );
   }
 
-  // If not authenticated: STRICT ACCESS CONTROL.
+  if (isDirectScanMode && isPublicScanLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-800 px-5 py-3 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+          <span>Validando etiqueta segura...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If not authenticated: STRICT ACCESS CONTROL. Public direct scans are the
+  // only exception and are resolved by a callable function without listing data.
   // The user can NEVER see any screen, dashboard, or data without a valid active session.
-  if (!isAuthenticated) {
+  if (!isAuthenticated && (!isDirectScanMode || requiresLoginToScan)) {
     const hasAnyAdmin = users.some((u) => u.role === 'admin_hospital' && u.active);
     return (
       <>
         <AuthScreen
-          onOpenSetupWizard={!hasAnyAdmin ? () => setIsSetupWizardOpen(true) : undefined}
+          onOpenSetupWizard={!hasAnyAdmin && !isDirectScanMode ? () => setIsSetupWizardOpen(true) : undefined}
         />
         {/* If first time with no admin registered, allow setup wizard modal */}
-        {!hasAnyAdmin && (
+        {!hasAnyAdmin && !isDirectScanMode && (
           <SetupWizardModal
             isOpen={isSetupWizardOpen}
             onClose={() => setIsSetupWizardOpen(false)}
@@ -259,7 +274,7 @@ const MainAppContent: React.FC = () => {
             />
           )}
 
-          {activeTab === 'configuracion' && <CompanySettingsSection />}
+          {activeTab === 'configuracion' && isAdminHospital && <CompanySettingsSection />}
         </main>
 
         {/* Discrete BIO-TAG footer */}

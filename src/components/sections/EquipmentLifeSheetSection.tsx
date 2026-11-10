@@ -1,4 +1,5 @@
 import React, { useRef } from 'react';
+import { uploadFileToStorage } from '../../firebase';
 import { useBiomedical } from '../../context/BiomedicalContext';
 import {
   Printer,
@@ -89,19 +90,14 @@ export const EquipmentLifeSheetSection: React.FC<EquipmentLifeSheetSectionProps>
     window.print();
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          updateEquipment({
-            ...selectedEquipment,
-            fotoUrl: reader.result,
-          });
-        }
-      };
-      reader.readAsDataURL(file);
+      const downloadUrl = await uploadFileToStorage(
+        file,
+        `institutions/${selectedEquipment.institutionId}/equipment_photos`
+      );
+      await updateEquipment({ ...selectedEquipment, fotoUrl: downloadUrl });
     }
   };
 

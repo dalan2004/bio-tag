@@ -77,7 +77,11 @@ export const NewMaintenanceModal: React.FC<NewMaintenanceModalProps> = ({
   const autoReportNumber = `No. ${String(hospitalConsecutive).padStart(4, '0')}`;
 
   // Form Fields - starts completely blank except today's date
-  const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(() => {
+    const now = new Date();
+    const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+    return localDate.toISOString().slice(0, 10);
+  });
   const [cliente, setCliente] = useState('');
   const [ciudadDpto, setCiudadDpto] = useState('');
   const [servicioUbicacion, setServicioUbicacion] = useState('');

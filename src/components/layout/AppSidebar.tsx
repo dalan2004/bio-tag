@@ -116,7 +116,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
       {/* Navigation Items */}
       <nav className="flex-1 space-y-1 overflow-y-auto pr-1">
-        {navItems.map((item) => {
+        {navItems.filter((item) => {
+          if (item.id === 'configuracion') return isAdminHospital;
+          if (item.id === 'alertas_ingenieria') return isIngeniero || isAdminHospital;
+          return true;
+        }).map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           return (

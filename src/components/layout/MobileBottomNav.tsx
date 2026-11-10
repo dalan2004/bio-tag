@@ -87,7 +87,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                 <span>Fechas y RH</span>
               </button>
 
-              <button
+              {(currentUserProfile?.role === 'ingeniero' || currentUserProfile?.role === 'admin_hospital') && <button
                 onClick={() => handleSelectTab('alertas_ingenieria')}
                 className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-colors ${
                   activeTab === 'alertas_ingenieria'
@@ -97,9 +97,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               >
                 <Bell className="w-5 h-5 text-amber-600" />
                 <span>Alertas Técnicas</span>
-              </button>
+              </button>}
 
-              <button
+              {currentUserProfile?.role === 'admin_hospital' && <button
                 onClick={() => handleSelectTab('configuracion')}
                 className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-colors ${
                   activeTab === 'configuracion'
@@ -109,7 +109,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               >
                 <Settings className="w-5 h-5 text-slate-600 dark:text-slate-400" />
                 <span>Configuración</span>
-              </button>
+              </button>}
 
               <button
                 onClick={() => {

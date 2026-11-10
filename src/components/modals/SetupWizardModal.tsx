@@ -58,6 +58,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
   const [adminRh, setAdminRh] = useState('');
   const [adminPass, setAdminPass] = useState('');
   const [adminPassConfirm, setAdminPassConfirm] = useState('');
+  const [bootstrapCode, setBootstrapCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
@@ -70,15 +71,11 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setIsUploadingLogo(true);
-      try {
-        const downloadUrl = await uploadFileToStorage(file, 'company_logos');
-        setEmpresaLogoUrl(downloadUrl);
-      } catch (err) {
-        console.error('Error subiendo logo en asistente a Firebase Storage:', err);
-      } finally {
-        setIsUploadingLogo(false);
-      }
+      setEmpresaLogoUrl('');
+      setErrorMsg(
+        'Por seguridad, el logo se carga después de crear e iniciar sesión con la cuenta administradora.'
+      );
+      e.target.value = '';
     }
   };
 
@@ -126,6 +123,10 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
       setErrorMsg('Por favor ingrese el correo institucional del administrador.');
       return;
     }
+    if (!bootstrapCode.trim()) {
+      setErrorMsg('Ingresa el código privado de configuración inicial.');
+      return;
+    }
     const strength = checkPasswordStrength(adminPass);
     if (!strength.isValid) {
       setErrorMsg(strength.message);
@@ -166,6 +167,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
           cargo: adminCargo.trim() || 'Director de Ingeniería Biomédica',
           rh: adminRh.trim() || undefined,
           pass: adminPass,
+          bootstrapCode: bootstrapCode.trim(),
         }
       );
     } catch (err) {
@@ -598,6 +600,24 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
               </div>
             </div>
 
+            <div>
+              <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                Código Privado de Configuración *
+              </label>
+              <input
+                type="password"
+                value={bootstrapCode}
+                onChange={(e) => setBootstrapCode(e.target.value)}
+                placeholder="Código configurado en Firebase Secrets"
+                autoComplete="off"
+                className="w-full py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
+                required
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Evita que un visitante pueda apropiarse de la primera cuenta administradora.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Password */}
               <div>
@@ -692,7 +712,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen }) =>
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-400">
-                  Debe tener al menos 8 caracteres con combinación de letras y números. Guardada cifrada por Firebase Auth.
+                  Debe tener al menos 12 caracteres e incluir mayúscula, minúscula, número y símbolo. Firebase Auth la almacena de forma segura.
                 </p>
               </div>
             )}

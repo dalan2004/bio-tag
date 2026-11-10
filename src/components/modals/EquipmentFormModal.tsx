@@ -216,7 +216,12 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
     if (file) {
       setIsUploadingPhoto(true);
       try {
-        const downloadUrl = await uploadFileToStorage(file, 'equipment_photos');
+        const targetInstitution = institutionId || userHospitalId;
+        if (!targetInstitution) throw new Error('No se pudo determinar la institución del equipo.');
+        const downloadUrl = await uploadFileToStorage(
+          file,
+          `institutions/${targetInstitution}/equipment_photos`
+        );
         setFotoUrl(downloadUrl);
       } catch (err) {
         console.error('Error subiendo foto de equipo a Firebase Storage:', err);
@@ -269,13 +274,7 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
           recomendacionesFabricante: recomendaciones.trim(),
         });
       } else {
-        // Cryptographically random 24-character token
-        const randomBytes = new Uint8Array(12);
-        crypto.getRandomValues(randomBytes);
-        const hex = Array.from(randomBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-        const newToken = `bio_tag_${hex}`;
-
-        const newId = `eq-${Date.now()}`;
+        const newId = `eq-${crypto.randomUUID()}`;
         await addEquipment({
           id: newId,
           institutionId: institutionId || userHospitalId,
@@ -303,8 +302,9 @@ export const EquipmentFormModal: React.FC<EquipmentFormModalProps> = ({
           accesorios,
           observaciones: observaciones.trim(),
           recomendacionesFabricante: recomendaciones.trim(),
-          tagToken: newToken,
-          tagActive: true,
+          // The backend creates the real token and activation state.
+          tagToken: '',
+          tagActive: false,
           fechaCreacion: new Date().toISOString().slice(0, 10),
         });
 

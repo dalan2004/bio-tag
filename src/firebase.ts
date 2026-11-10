@@ -1,9 +1,8 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp } from 'firebase/app';
 import {
   getAuth,
   setPersistence,
-  browserLocalPersistence,
-  createUserWithEmailAndPassword,
+  browserSessionPersistence,
   signOut as fbSignOut,
   sendPasswordResetEmail,
   EmailAuthProvider,
@@ -21,10 +20,20 @@ import {
   clearIndexedDbPersistence,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Primary Firebase App
 export const app = initializeApp(firebaseConfig);
+
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY?.trim();
+if (appCheckSiteKey) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 
 // Initialize Cloud Firestore with offline multi-tab persistent cache
 export const db: Firestore = initializeFirestore(
@@ -37,35 +46,122 @@ export const db: Firestore = initializeFirestore(
   firebaseConfig.firestoreDatabaseId
 );
 
-// Firebase Auth with local browser persistence (keeps user session across reloads)
+// Session persistence limits exposure on shared hospital workstations. The user
+// remains signed in across reloads, but not after closing the browser tab.
 export const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence).catch((err) => {
+setPersistence(auth, browserSessionPersistence).catch((err) => {
   console.warn('Firebase Auth persistence setup note:', err);
 });
 
 // Firebase Storage for logos and biomedical equipment photos
 export const storage = getStorage(app);
+export const functions = getFunctions(app, 'us-central1');
+
+export interface PublicScanResult {
+  found: boolean;
+  requiresLogin?: boolean;
+  institution?: Record<string, unknown>;
+  equipment?: Record<string, unknown>;
+  latestMaintenance?: Record<string, unknown> | null;
+}
+
+async function callFunction<TRequest, TResponse>(name: string, data: TRequest): Promise<TResponse> {
+  const callable = httpsCallable<TRequest, TResponse>(functions, name, {
+    limitedUseAppCheckTokens: true,
+  });
+  const response = await callable(data);
+  return response.data;
+}
+
+export const getBootstrapStatusRemote = () =>
+  callFunction<Record<string, never>, { configured: boolean }>('getBootstrapStatus', {});
+
+export const bootstrapAdminRemote = (data: Record<string, unknown>) =>
+  callFunction<Record<string, unknown>, { success: boolean; email: string }>('bootstrapAdmin', data);
+
+export const createHospitalUserRemote = (data: Record<string, unknown>) =>
+  callFunction<Record<string, unknown>, { uid: string; email: string }>('createHospitalUser', data);
+
+export const setHospitalUserActiveRemote = (userId: string, active: boolean) =>
+  callFunction<{ userId: string; active: boolean }, { success: boolean }>(
+    'setHospitalUserActive',
+    { userId, active }
+  );
+
+export const syncMyClaimsRemote = () =>
+  callFunction<Record<string, never>, { success: boolean }>('syncMyClaims', {});
+
+export const saveEquipmentRemote = (equipment: Record<string, unknown>) =>
+  callFunction<
+    { equipment: Record<string, unknown> },
+    { equipment: Record<string, unknown> }
+  >('saveEquipment', { equipment });
+
+export const setEquipmentTagStateRemote = (
+  equipmentId: string,
+  operation: 'rotate' | 'deactivate'
+) =>
+  callFunction<
+    { equipmentId: string; operation: 'rotate' | 'deactivate' },
+    { token: string; active: boolean }
+  >('setEquipmentTagState', { equipmentId, operation });
+
+export const createMaintenanceRemote = (record: Record<string, unknown>) =>
+  callFunction<
+    { record: Record<string, unknown> },
+    { maintenance: Record<string, unknown> }
+  >('createMaintenance', { record });
+
+export const createIncidentRemote = (incident: Record<string, unknown>) =>
+  callFunction<
+    { incident: Record<string, unknown> },
+    { incident: Record<string, unknown> }
+  >('createIncident', { incident });
+
+export const updateIncidentStatusRemote = (
+  incidentId: string,
+  status: 'pendiente' | 'en_revision' | 'resuelto'
+) =>
+  callFunction<
+    { incidentId: string; status: 'pendiente' | 'en_revision' | 'resuelto' },
+    { success: boolean }
+  >('updateIncidentStatus', { incidentId, status });
+
+export const getPublicEquipmentByTokenRemote = (token: string) =>
+  callFunction<{ token: string }, PublicScanResult>('getPublicEquipmentByToken', { token });
+
+export function getPublicAppUrl(): string {
+  const configured = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
+  return (configured || window.location.origin).replace(/\/$/, '');
+}
 
 /**
  * Uploads a file (photo or logo) directly to Firebase Storage and returns the public HTTPS download URL.
  * Falls back gracefully if offline or in case of temporary storage restriction.
  */
 export async function uploadFileToStorage(file: File, folder: string): Promise<string> {
-  try {
-    const timestamp = Date.now();
-    const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const storageRef = ref(storage, `${folder}/${timestamp}_${sanitizedName}`);
-    const snapshot = await uploadBytes(storageRef, file);
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    return downloadUrl;
-  } catch (error) {
-    console.warn('Firebase Storage upload warning (falling back to data URL for offline safety):', error);
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
+  const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+  if (!allowedTypes.has(file.type)) {
+    throw new Error('Solo se permiten imágenes JPEG, PNG o WebP.');
   }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error('La imagen no puede superar 5 MB.');
+  }
+  const validFolder =
+    folder === 'company_logos/main' ||
+    /^institutions\/[a-zA-Z0-9_-]{1,128}\/equipment_photos$/.test(folder);
+  if (!validFolder) {
+    throw new Error('La ruta de almacenamiento no está autorizada.');
+  }
+
+  const uniqueId = crypto.randomUUID();
+  const extension = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+  const storageRef = ref(storage, `${folder}/${uniqueId}.${extension}`);
+  const snapshot = await uploadBytes(storageRef, file, {
+    contentType: file.type,
+    cacheControl: 'public,max-age=3600',
+  });
+  return getDownloadURL(snapshot.ref);
 }
 
 /**
@@ -82,8 +178,8 @@ export interface PasswordStrength {
 }
 
 export function checkPasswordStrength(password: string): PasswordStrength {
-  const hasMinLength = password.length >= 8;
-  const hasLetters = /[a-zA-Z]/.test(password);
+  const hasMinLength = password.length >= 12;
+  const hasLetters = /[a-z]/.test(password) && /[A-Z]/.test(password);
   const hasNumbers = /[0-9]/.test(password);
   const hasSpecial = /[^a-zA-Z0-9]/.test(password);
 
@@ -93,12 +189,12 @@ export function checkPasswordStrength(password: string): PasswordStrength {
   if (hasNumbers) score++;
   if (hasSpecial) score++;
 
-  const isValid = hasMinLength && hasLetters && hasNumbers;
-  let message = 'Mínimo 8 caracteres con letras y números';
+  const isValid = hasMinLength && hasLetters && hasNumbers && hasSpecial;
+  let message = 'Mínimo 12 caracteres, mayúscula, minúscula, número y símbolo';
   if (!hasMinLength) {
-    message = 'Mínimo 8 caracteres requeridos';
-  } else if (!hasLetters || !hasNumbers) {
-    message = 'Debe incluir tanto letras como números';
+    message = 'Mínimo 12 caracteres requeridos';
+  } else if (!hasLetters || !hasNumbers || !hasSpecial) {
+    message = 'Debe incluir mayúscula, minúscula, número y símbolo';
   } else if (score >= 4) {
     message = 'Contraseña fuerte y segura';
   } else {
@@ -116,47 +212,6 @@ export function checkPasswordStrength(password: string): PasswordStrength {
   };
 }
 
-/**
- * Creates a new user in Firebase Auth using an isolated secondary Firebase App instance.
- * This guarantees the administrator's active session is NOT interrupted or replaced.
- * Automatically sends a password setup email so the user sets their own private password.
- */
-export async function createSecondaryUser(email: string): Promise<string> {
-  const apps = getApps();
-  let secondaryApp = apps.find((a) => a.name === 'BIO_TAG_SecondaryApp');
-  if (!secondaryApp) {
-    secondaryApp = initializeApp(firebaseConfig, 'BIO_TAG_SecondaryApp');
-  }
-  const secondaryAuth = getAuth(secondaryApp);
-
-  // Cryptographically random 24-character temporary password
-  const randomBytes = new Uint8Array(16);
-  crypto.getRandomValues(randomBytes);
-  const tempPassword = 'Sec!' + Array.from(randomBytes).map((b) => b.toString(16)).join('') + '9A#';
-
-  const userCred = await createUserWithEmailAndPassword(
-    secondaryAuth,
-    email.trim().toLowerCase(),
-    tempPassword
-  );
-  const uid = userCred.user.uid;
-
-  // Immediately sign out of secondary auth to release resources
-  await fbSignOut(secondaryAuth);
-
-  // Send an invitation / password reset email to the user so they configure their own password
-  try {
-    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
-  } catch (err) {
-    console.warn('Note: Could not automatically dispatch password reset email:', err);
-  }
-
-  return uid;
-}
-
-/**
- * Sends a password reset email via Firebase Auth
- */
 export async function sendPasswordReset(email: string): Promise<void> {
   await sendPasswordResetEmail(auth, email.trim().toLowerCase());
 }
@@ -171,7 +226,7 @@ export async function changeUserPassword(currentPassword: string, newPassword: s
 
   const strength = checkPasswordStrength(newPassword);
   if (!strength.isValid) {
-    throw new Error('La nueva contraseña debe tener al menos 8 caracteres e incluir letras y números.');
+    throw new Error('La nueva contraseña debe tener 12 caracteres e incluir mayúscula, minúscula, número y símbolo.');
   }
 
   const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPassword);
@@ -227,28 +282,23 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
       emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
     },
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('Firestore operation failed', {
+    operationType: errInfo.operationType,
+    path: errInfo.path,
+    error: errInfo.error,
+  });
   return errInfo;
 }
 
-// Connection test as required by skill
+// Read only the intentionally public branding document for connectivity checks.
 export async function testFirestoreConnection() {
   try {
-    await getDocFromServer(doc(db, 'institutions', 'connection_test'));
+    await getDocFromServer(doc(db, 'companies', 'main'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firebase client is offline or network connecting...');

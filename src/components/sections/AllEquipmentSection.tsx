@@ -114,6 +114,12 @@ export const AllEquipmentSection: React.FC<AllEquipmentSectionProps> = ({
 
   const handleExportCsv = () => {
     if (filteredEquipments.length === 0) return;
+    const csvCell = (value: unknown) => {
+      const raw = String(value ?? '');
+      // Prevent spreadsheet formula execution when a CSV is opened in Excel.
+      const neutralized = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+      return `"${neutralized.replace(/"/g, '""')}"`;
+    };
     const headers = [
       'Código Activo',
       'Nombre',
@@ -125,35 +131,34 @@ export const AllEquipmentSection: React.FC<AllEquipmentSectionProps> = ({
       'Frecuencia (Meses)',
       'Último Mantenimiento',
       'Próximo Mantenimiento',
-      'Token NFC/QR',
     ];
 
     const rows = filteredEquipments.map((eq) => {
       const inst = institutions.find((i) => i.id === eq.institutionId);
       const latest = getLatestMaintenance(eq.id);
       return [
-        `"${eq.codigoActivo}"`,
-        `"${eq.nombre}"`,
-        `"${eq.marca}"`,
-        `"${eq.modelo}"`,
-        `"${eq.serie}"`,
-        `"${eq.servicioUbicacion}"`,
-        `"${inst?.name || ''}"`,
-        eq.frecuenciaMantenimientoMeses,
-        `"${latest?.fecha || 'Sin registro'}"`,
-        `"${latest?.proximaFechaCalculada || 'Sin programar'}"`,
-        `"${eq.tagToken}"`,
+        csvCell(eq.codigoActivo),
+        csvCell(eq.nombre),
+        csvCell(eq.marca),
+        csvCell(eq.modelo),
+        csvCell(eq.serie),
+        csvCell(eq.servicioUbicacion),
+        csvCell(inst?.name || ''),
+        csvCell(eq.frecuenciaMantenimientoMeses),
+        csvCell(latest?.fecha || 'Sin registro'),
+        csvCell(latest?.proximaFechaCalculada || 'Sin programar'),
       ].join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\n');
+    const objectUrl = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', objectUrl);
     link.setAttribute('download', `inventario_biomedico_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
   };
 
   const hospitalTotalEquipments = userHospitalId

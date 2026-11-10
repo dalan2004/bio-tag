@@ -26,8 +26,6 @@ export const CompanySettingsSection: React.FC = () => {
     updateCompanyProfile,
     currentUserProfile,
     isAdminHospital,
-    resetToInitialData,
-    setIsSetupWizardOpen,
   } = useBiomedical();
 
   const [activeTab, setActiveTab] = useState<'empresa' | 'usuarios' | 'sistema'>('empresa');
@@ -50,7 +48,7 @@ export const CompanySettingsSection: React.FC = () => {
     if (file) {
       setIsUploadingLogo(true);
       try {
-        const downloadUrl = await uploadFileToStorage(file, 'company_logos');
+        const downloadUrl = await uploadFileToStorage(file, 'company_logos/main');
         setLogoUrl(downloadUrl);
       } catch (err) {
         console.error('Error subiendo logo a Firebase Storage:', err);
@@ -477,33 +475,11 @@ export const CompanySettingsSection: React.FC = () => {
       {activeTab === 'sistema' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs max-w-xl">
           <h3 className="font-bold text-base text-slate-900 dark:text-white mb-2">
-            Restablecer Sistema o Abrir Asistente
+            Seguridad del sistema
           </h3>
-          <p className="text-xs text-slate-500 mb-6">
-            Si deseas volver a ejecutar el asistente de configuración inicial o limpiar los datos almacenados localmente para iniciar una nueva empresa, puedes hacerlo aquí.
+          <p className="text-xs text-slate-500">
+            La configuración inicial queda bloqueada después de crear el primer administrador. Las restauraciones y eliminaciones masivas deben hacerse desde Firebase, con copia de seguridad y control de acceso administrativo.
           </p>
-
-          <div className="space-y-3">
-            <button
-              onClick={() => setIsSetupWizardOpen(true)}
-              className="w-full py-2.5 px-4 rounded-xl border border-teal-500 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
-            >
-              <Building2 className="w-4 h-4" />
-              <span>Abrir Asistente de Configuración (3 Pasos)</span>
-            </button>
-
-            <button
-              onClick={() => {
-                if (window.confirm('¿Está seguro de reiniciar todos los datos locales y volver a iniciar el asistente?')) {
-                  resetToInitialData();
-                }
-              }}
-              className="w-full py-2.5 px-4 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>Restablecer Todo a Valores Vacíos</span>
-            </button>
-          </div>
         </div>
       )}
     </div>

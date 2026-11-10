@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { getPublicAppUrl } from '../../firebase';
 import { BiomedicalEquipment, Institution } from '../../types/biomedical';
 import { useBiomedical } from '../../context/BiomedicalContext';
 import {
@@ -40,7 +41,7 @@ export const NfcQrModal: React.FC<NfcQrModalProps> = ({
   const [nfcWriteStatus, setNfcWriteStatus] = useState<string | null>(null);
 
   // Exact target URL as required: https://[dominio-de-la-app]/e/[TOKEN]
-  const finalScanUrl = `${window.location.origin}/e/${equipment.tagToken}`;
+  const finalScanUrl = `${getPublicAppUrl()}/e/${equipment.tagToken}`;
 
   useEffect(() => {
     if (isOpen && equipment.tagToken) {
